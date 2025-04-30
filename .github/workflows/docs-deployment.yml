@@ -2,7 +2,7 @@ name: Deploy Documentation
 
 on:
   push:
-    branches: [mkdocs]
+    branches: [master, mono/docs, mkdocs]
     paths:
       - 'docs/**'
       - 'pkgs/**'
