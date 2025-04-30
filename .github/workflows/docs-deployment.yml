@@ -21,9 +21,7 @@ jobs:
 
       - name: Display VM Info
         run: |
-          echo "Running on VM: $VM_NAME"
-          echo "Hostname: $(hostname)"
-          
+          echo "Running on VM: $VM_NAME"          
       - name: Deploy documentation
         working-directory: docs
         run: |
