@@ -1,13 +1,9 @@
 import pytest
-from copy import deepcopy
 
-from jaml import (
-    loads,
-    round_trip_loads
-)
+from jaml import loads, round_trip_loads
 
 # The input JML content (as a multi-line string)
-JML_INPUT = r'''
+JML_INPUT = r"""
 rootDir = "src"
 packages = ${packages}
 
@@ -19,7 +15,7 @@ path = @{rootDir} + "/" + %{package.name} + "/" + %{name}
 type = "python"
 test_conf = { testFramework = "pytest", tests = %{module.tests} }
 
-'''
+"""
 
 # The base external context used during rendering.
 BASE_CONTEXT = {
@@ -47,7 +43,7 @@ BASE_CONTEXT = {
     ],
 }
 
-expected_result = r'''
+expected_result = r"""
 rootDir = "src"
 packages = {
     "name": "auth",
@@ -68,7 +64,8 @@ packages = {
         },
     ],
 }
-'''
+"""
+
 
 # @pytest.mark.xfail(reason="Pending proper implementation")
 @pytest.mark.spec
@@ -81,7 +78,7 @@ def test_v2_round_trip_loads_valid():
     # Assuming that the AST is a dict-like structure and should contain a 'rootDir' key.
     assert isinstance(ast, dict), "The AST should be a dictionary."
     assert "rootDir" in ast, "AST should contain 'rootDir' key."
-    
+
 
 # @pytest.mark.xfail(reason="Pending proper implementation")
 @pytest.mark.spec
@@ -91,19 +88,19 @@ def test_context_scoped_var_resolve():
     Validate that updating the 'rootDir' in the AST leads to an updated path in the rendered output.
     """
     data = round_trip_loads(JML_INPUT)
-    print('\n\n[TEST DEBUG]:')
-    print(data,'\n\n')
+    print("\n\n[TEST DEBUG]:")
+    print(data, "\n\n")
     assert data["rootDir"] == '"src"'
 
     resolved_config = data.resolve()
+    assert resolved_config["rootDir"] == "src"
 
     # out = data.dumps()
     # rendered_data = data.render(out, context=BASE_CONTEXT)
     rendered_data = data.render(context=BASE_CONTEXT)
-    final_out = data.dumps()
+    data.dumps()
 
-    print('\n\n\n\n[FINAL_OUT]:')
+    print("\n\n\n\n[FINAL_OUT]:")
     print(rendered_data)
     assert rendered_data["rootDir"] == "src"
     assert isinstance(rendered_data["packages"], list)
-

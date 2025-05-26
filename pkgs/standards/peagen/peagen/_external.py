@@ -1,20 +1,9 @@
-"""
-external.py
+"""Helpers for calling external agents.
 
-This module contains functions for external integrations.
-It provides:
-
-  1. call_external_agent:
-     - Sends a rendered prompt to an external agent (e.g., an LLM or language model API)
-       and returns the generated content.
-
-  2. chunk_content:
-     - Optionally splits or processes the generated content into manageable chunks
-       before saving.
-
-Note:
-  - The implementations here are placeholders. In a real-world scenario, you would
-    replace them with calls to an actual external API (e.g., OpenAI, Hugging Face, etc.).
+These functions forward rendered prompts to language model APIs and
+optionally split the results into manageable chunks. The current
+implementations are placeholders and should be replaced with real API
+calls.
 """
 
 import os
@@ -61,7 +50,7 @@ def call_external_agent(
         from swarmauri.agents.QAAgent import QAAgent
         from swarmauri.messages.SystemMessage import SystemMessage
 
-        from .GenericLLM import GenericLLM
+        from ._llm import GenericLLM
     except Exception as e:
         error_details = traceback.format_exc()  # Get full traceback details
         raise ImportError(
@@ -75,32 +64,41 @@ def call_external_agent(
     # Log the prompt (truncated if configured)
     truncated_prompt = prompt[:140] + "..." if _config["truncate"] else prompt
     if logger:
-        logger.info(f"Sending prompt to external agent: \n\t{truncated_prompt}\n")
+        logger.info(f"Sending prompt to external llm: \n\t{truncated_prompt}\n")
+        logger.debug(f"Agent env: {agent_env}")
 
     # Extract configuration from agent_env
     provider = os.getenv("PROVIDER") or agent_env.get("provider", "deepinfra").lower()
     api_key = os.getenv(f"{provider.upper()}_API_KEY") or agent_env.get("api_key")
     model_name = agent_env.get("model_name")
-    max_tokens = int(agent_env.get("max_tokens", 3000))
+    max_tokens = int(agent_env.get("max_tokens", 8192))
 
     # Initialize the generic LLM manager
     llm_manager = GenericLLM()
+    if logger:
+        logger.debug(f"Requesting provider '{provider}' model '{model_name}'")
 
     # Special case for LlamaCpp which doesn't need an API key
     if provider.lower() == "llamacpp":
-        llm = llm_manager.get_llm(
-            provider=provider,
-            api_key=api_key,
-            model_name="localhost",
-            allowed_models=["localhost"],
-        )
+        try:
+            llm = llm_manager.get_llm(
+                provider=provider,
+                api_key=api_key,
+                model_name="localhost",
+                allowed_models=["localhost"],
+            )
+        except Exception as e:
+            logger.error(str(e))
     else:
-        # Get an instance of the requested LLM
-        llm = llm_manager.get_llm(
-            provider=provider,
-            api_key=api_key,
-            model_name=model_name,
-        )
+        try:
+            # Get an instance of the requested LLM
+            llm = llm_manager.get_llm(
+                provider=provider,
+                api_key=api_key,
+                model_name=model_name,
+            )
+        except Exception as e:
+            logger.error(str(e))
 
     # Create QAAgent with the configured LLM
     system_context = "You are a software developer."
@@ -119,6 +117,8 @@ def call_external_agent(
 
     # Process and chunk the content
     content = chunk_content(result, logger)
+    if logger:
+        logger.debug(f"Received content length: {len(content)}")
 
     # Clean up
     del agent
@@ -130,28 +130,40 @@ def chunk_content(full_content: str, logger: Optional[Any] = None) -> str:
     Optionally splits the content into chunks. Returns either a single chunk
     or the full content.
     """
-    try:
-        # Remove any unwanted <think> blocks
-        pattern = r"<think>[\s\S]*?</think>"
-        cleaned_text = re.sub(pattern, "", full_content).strip()
+    # Remove any unwanted <think> blocks first
+    pattern = r"<think>[\s\S]*?</think>"
+    cleaned_text = re.sub(pattern, "", full_content).strip()
 
+    try:
         from swarmauri.chunkers.MdSnippetChunker import MdSnippetChunker
 
         chunker = MdSnippetChunker()
         chunks = chunker.chunk_text(cleaned_text)
+        if logger:
+            logger.debug(f"Chunker returned {len(chunks)} chunk(s)")
         if len(chunks) > 1:
-            return cleaned_text
+            logger.warning(
+                "MdSnippetChunker found more than one snippet, took the first."
+            )
+            if logger:
+                logger.debug("Returning first chunk of size %d", len(chunks[0][2]))
+            return chunks[0][2]
         try:
             return chunks[0][2]
         except IndexError:
+            logger.warning("MdSnippetChunker found no chunks, using cleaned_text.")
+            if logger:
+                logger.debug("Returning cleaned_text of length %d", len(cleaned_text))
             return cleaned_text
     except ImportError:
         if logger:
             logger.warning(
                 "MdSnippetChunker not found. Returning full content without chunking."
             )
-        return full_content
+            logger.debug("Returning cleaned_text of length %d", len(cleaned_text))
+        return cleaned_text
     except Exception as e:
         if logger:
             logger.error(f"[ERROR] Failed to chunk content: {e}")
-        return full_content
+            logger.debug("Returning cleaned_text of length %d", len(cleaned_text))
+        return cleaned_text

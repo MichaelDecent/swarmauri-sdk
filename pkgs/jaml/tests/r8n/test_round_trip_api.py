@@ -1,7 +1,10 @@
-import os
-import pytest
-import math
-from jaml import round_trip_loads, round_trip_load, round_trip_dumps, round_trip_dump, loads
+from jaml import (
+    round_trip_loads,
+    round_trip_load,
+    round_trip_dumps,
+    round_trip_dump,
+    loads,
+)
 
 # Robust JML payload.
 ROBUST_JML = """
@@ -26,15 +29,16 @@ EXPECTED_DATA = {
         "age": 30,
         "is_active": True,
         "colors": ["red", "green", "blue"],
-        "profile": {"email": "alice@example.com", "role": "admin"}
+        "profile": {"email": "alice@example.com", "role": "admin"},
     },
     "settings": {
         "theme": "dark",
         "max_connections": 100,
         "pi_value": 3.14159,
-        "nullable": None
-    }
+        "nullable": None,
+    },
 }
+
 
 def test_round_trip_loads():
     """
@@ -46,6 +50,7 @@ def test_round_trip_loads():
     # Re-parse dumped string using our plain loader.
     data = loads(dumped_str)
     assert data == EXPECTED_DATA
+
 
 def test_round_trip_load(tmp_path):
     """
@@ -60,6 +65,7 @@ def test_round_trip_load(tmp_path):
     data = loads(dumped_str)
     assert data == EXPECTED_DATA
 
+
 def test_round_trip_dumps():
     """
     Test that round_trip_dumps() serializes a DocumentNode AST into a JML string,
@@ -70,6 +76,7 @@ def test_round_trip_dumps():
     assert isinstance(dumped_str, str)
     data = loads(dumped_str)
     assert data == EXPECTED_DATA
+
 
 def test_round_trip_dump(tmp_path):
     """

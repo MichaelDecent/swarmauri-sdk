@@ -18,9 +18,8 @@ class J2PromptTemplate(PromptTemplateBase):
 
     Features:
     - Support for multiple template directories with fallback mechanism
-    - Built-in filters: split_whitespace, make_singular (when code_generation_mode is True)
+    - Built-in filters: split_whitespace, make_singular, make_plural
     - Template caching for performance
-    - Configurable for both general-purpose use and code generation
     """
 
     # The template attribute may be a literal string (template content),
@@ -30,7 +29,6 @@ class J2PromptTemplate(PromptTemplateBase):
     # Optional templates_dir attribute (can be a single path or a list of paths)
     templates_dir: Optional[Union[str, List[str]]] = None
     # Whether to enable code generation specific features like linguistic filters
-    code_generation_mode: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     type: Literal["J2PromptTemplate"] = "J2PromptTemplate"
@@ -55,10 +53,8 @@ class J2PromptTemplate(PromptTemplateBase):
 
         # Add basic filters
         env.filters["split"] = self.split_whitespace
-
-        # Add code generation filters when in code_generation_mode
-        if self.code_generation_mode:
-            env.filters["make_singular"] = self.make_singular
+        env.filters["make_singular"] = self.make_singular
+        env.filters["make_plural"] = self.make_plural
 
         return env
 
@@ -140,8 +136,8 @@ class J2PromptTemplate(PromptTemplateBase):
             loader=FileSystemLoader([directory]), autoescape=False
         )
         fallback_env.filters["split"] = self.split_whitespace
-        if self.code_generation_mode:
-            fallback_env.filters["make_singular"] = self.make_singular
+        fallback_env.filters["make_singular"] = self.make_singular
+        fallback_env.filters["make_plural"] = self.make_plural
 
         self.template = fallback_env.get_template(template_name)
 
@@ -187,7 +183,7 @@ class J2PromptTemplate(PromptTemplateBase):
             return value.split()
 
     @staticmethod
-    def make_singular(verb):
+    def make_singular(word: str):
         """
         Converts a plural word to singular form.
         Requires inflect library to be installed.
@@ -198,10 +194,24 @@ class J2PromptTemplate(PromptTemplateBase):
             # Initialize the engine
             p = inflect.engine()
             # Return the singular form of the verb
-            return p.singular_noun(verb) if p.singular_noun(verb) else verb
+            return p.singular_noun(word) if p.singular_noun(word) else word
         except ImportError:
             # Return the original if inflect is not available
-            return verb
+            return word
+
+    @staticmethod
+    def make_plural(word: str) -> str:
+        """
+        Converts a singular word to its plural form.
+        Requires inflect library to be installed.
+        """
+        try:
+            import inflect
+
+            p = inflect.engine()
+            return p.plural(word) or word
+        except ImportError:
+            return word
 
     def add_filter(self, name: str, filter_func: Callable) -> None:
         """
@@ -216,4 +226,4 @@ class J2PromptTemplate(PromptTemplateBase):
 
 
 # Create a singleton instance for peagen usage with code generation mode enabled
-j2pt = J2PromptTemplate(code_generation_mode=True)
+j2pt = J2PromptTemplate()

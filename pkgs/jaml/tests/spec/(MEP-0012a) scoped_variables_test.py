@@ -1,11 +1,8 @@
 # test_scoped_variables.py
 import pytest
 
-from jaml import (
-    round_trip_loads
-)
+from jaml import round_trip_loads
 
-from jaml import parser
 
 @pytest.mark.spec
 @pytest.mark.mep0012
@@ -74,14 +71,10 @@ def test_context_scope_render_time():
 summary = f"User: ${user.name}, Age: ${user.age}"
 """
     # Provide context at render-time:
-    ctx = {
-        "user": {
-            "name": "Azzy",
-            "age":  9
-        }
-    }
+    ctx = {"user": {"name": "Azzy", "age": 9}}
 
-    rendered = data.render(context=ctx)
+    data = round_trip_loads(toml_str)
+    data.render(context=ctx)
     reserialized = data.render()
     # Expect "User: Azzy, Age: 9"
     assert "User: Azzy, Age: 9" in reserialized
@@ -89,7 +82,9 @@ summary = f"User: ${user.name}, Age: ${user.age}"
 
 @pytest.mark.spec
 @pytest.mark.mep0012
-@pytest.mark.xfail(reason="F-string dynamic style resolution not fully implemented yet.")
+@pytest.mark.xfail(
+    reason="F-string dynamic style resolution not fully implemented yet."
+)
 def test_f_string_dynamic_style():
     """
     MEP-012:
@@ -103,7 +98,7 @@ config_path = f"@{paths.base}/config.toml"
 
     data = round_trip_loads(toml_str)
     rendered = data.render()
-    reserialized = rendered.dumps() 
+    reserialized = rendered.dumps()
     assert "/home/user/config.toml" in reserialized
 
 
@@ -113,7 +108,7 @@ config_path = f"@{paths.base}/config.toml"
 def test_concatenation_style():
     """
     MEP-012:
-      Using concatenation style (variable + literal) should produce the same result 
+      Using concatenation style (variable + literal) should produce the same result
       as the f-string approach.
     """
     toml_str = """
@@ -129,11 +124,13 @@ config_path = @{paths.base} + "/myapp/config.toml"
 
 @pytest.mark.spec
 @pytest.mark.mep0012
-@pytest.mark.xfail(reason="Partial expression evaluation for mixed styles not implemented yet.")
+@pytest.mark.xfail(
+    reason="Partial expression evaluation for mixed styles not implemented yet."
+)
 def test_mixed_styles_incomplete_implementation():
     """
     MEP-012:
-      A single line that mixes f-string placeholders and + operator 
+      A single line that mixes f-string placeholders and + operator
       might not be fully supported yet. Mark as xfail until done.
     """
     toml_str = """
@@ -143,9 +140,11 @@ config_path = f"${base}" + "/dynamic/config.toml"
 """
     ctx = {"base": "/custom"}
     data = round_trip_loads(toml_str)
-    rendered = data.render(context=ctx)
-    reserialized = rendered.dumps()
-    assert "/opt/dynamic/config.toml" in reserialized or "/custom/dynamic/config.toml" in reserialized
+    reserialized = data.render(context=ctx).dumps()
+    assert (
+        "/opt/dynamic/config.toml" in reserialized
+        or "/custom/dynamic/config.toml" in reserialized
+    )
 
 
 @pytest.mark.spec
@@ -154,8 +153,8 @@ config_path = f"${base}" + "/dynamic/config.toml"
 def test_global_and_context_scope_same_name():
     """
     MEP-012:
-      If a variable name is present in both global and context scope, 
-      it should refer to whichever is considered primary. 
+      If a variable name is present in both global and context scope,
+      it should refer to whichever is considered primary.
       This might be unimplemented or ambiguous for now -> xfail.
     """
     toml_str = """
@@ -167,9 +166,10 @@ file = f"${path}/config.toml"
 """
     ctx = {"path": "/render-time"}
     data = round_trip_loads(toml_str)
-    rendered = data.render(context=ctx)
+    data.render(context=ctx)
     reserialized = data.dumps()
     assert "/render-time/config.toml" in reserialized
+
 
 @pytest.mark.spec
 @pytest.mark.mep0012
@@ -177,8 +177,8 @@ file = f"${path}/config.toml"
 def test_global_and_context_scope_same_name_and_inline_cmt():
     """
     MEP-012:
-      If a variable name is present in both global and context scope, 
-      it should refer to whichever is considered primary. 
+      If a variable name is present in both global and context scope,
+      it should refer to whichever is considered primary.
       This might be unimplemented or ambiguous for now -> xfail.
     """
     toml_str = """
@@ -191,8 +191,5 @@ file = f"${path}/config.toml" # This comment may cause a failure
     ctx = {"path": "/render-time"}
 
     data = round_trip_loads(toml_str)
-    rendered = data.render(context=ctx)
-    reserialized = rendered.dumps()
+    reserialized = data.render(context=ctx).dumps()
     assert "/render-time/config.toml" in reserialized
-
-

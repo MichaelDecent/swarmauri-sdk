@@ -8,13 +8,11 @@ Folded‑expression evaluation for the *resolve* phase.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List, Optional
 
 from lark import Token, Tree
 
 from ._eval import safe_eval
-from ._substitute import _substitute_vars  # still used for edge cases
 
 
 # ───────────────────────────── token classes ──────────────────────────────
@@ -27,7 +25,7 @@ _STR_TOKENS = {
 
 _SCOPE_PREFIX = {
     "GLOBAL_SCOPED_VAR": "@",
-    "LOCAL_SCOPED_VAR":  "%",
+    "LOCAL_SCOPED_VAR": "%",
     "CONTEXT_SCOPED_VAR": "$",
 }
 
@@ -51,7 +49,7 @@ def _lookup(path: str, *envs: Dict[str, Any]) -> Optional[Any]:
 def _tok_to_py(
     tok: Token,
     g: Dict[str, Any],
-    l: Dict[str, Any],
+    local_env: Dict[str, Any],
     c: Dict[str, Any],
 ) -> str:
     """Convert a Lark token to a Python snippet (or placeholder)."""
@@ -76,7 +74,7 @@ def _tok_to_py(
     # ───────────────────────── Scope‑prefixed vars ───────────────────────────
     if tok.type in _SCOPE_PREFIX:
         marker = _SCOPE_PREFIX[tok.type]
-        inner  = tok.value[2:-1]  # strip the @{…}, %{…}, or ${…}
+        inner = tok.value[2:-1]  # strip the @{…}, %{…}, or ${…}
 
         # Context‑scoped (${…})
         if marker == "$":
@@ -89,19 +87,18 @@ def _tok_to_py(
             return tok.value
 
         # Global (@{…}) or local (%{…})
-        val = (_lookup(inner, g) if marker == "@" else _lookup(inner, l, g))
+        val = _lookup(inner, g) if marker == "@" else _lookup(inner, local_env, g)
         if val is None:
             return tok.value
         if hasattr(val, "evaluate"):
             val = val.evaluate()
         if isinstance(val, str):
             # strip any leftover quotes
-            val = val.strip('"\'' )
+            val = val.strip("\"'")
         return repr(val)
 
     # ────────────────────────────── Fallback ────────────────────────────────
     return tok.value
-
 
 
 # ─────────────────────────── public entry‑point ───────────────────────────
@@ -113,12 +110,15 @@ def evaluate_expression_tree(
 ) -> Any:
     """Resolve a `<( … )>` expression, substituting @{…} and %{…} immediately.
     Leaves ${…} intact and wraps in an f-string if any remain."""
-    import re
-    from ._eval import safe_eval
     from lark import Token
     from ._ast_nodes import (
-        BaseNode, HspacesNode, InlineWhitespaceNode, WhitespaceNode,
-        IntegerNode, FloatNode, BooleanNode
+        BaseNode,
+        HspacesNode,
+        InlineWhitespaceNode,
+        WhitespaceNode,
+        IntegerNode,
+        FloatNode,
+        BooleanNode,
     )
 
     # Debug entry
@@ -131,13 +131,16 @@ def evaluate_expression_tree(
 
     # Collect only meaningful children (drop whitespace tokens/nodes)
     items = [
-        c for c in getattr(tree, "children", [])
+        c
+        for c in getattr(tree, "children", [])
         if not (
             (isinstance(c, Token) and c.type in ("HSPACES", "INLINE_WS", "WHITESPACE"))
             or isinstance(c, (HspacesNode, InlineWhitespaceNode, WhitespaceNode))
         )
     ]
-    print(f"[DEBUG EXPR] Expression items: {[getattr(c, 'value', repr(c)) for c in items]}")
+    print(
+        f"[DEBUG EXPR] Expression items: {[getattr(c, 'value', repr(c)) for c in items]}"
+    )
 
     parts: List[str] = []
     for c in items:
@@ -174,7 +177,9 @@ def evaluate_expression_tree(
                 snippet = snippet[1:-1]
 
         # 5) AST nodes carrying a Token in .meta
-        elif isinstance(c, BaseNode) and hasattr(c, "meta") and isinstance(c.meta, Token):
+        elif (
+            isinstance(c, BaseNode) and hasattr(c, "meta") and isinstance(c.meta, Token)
+        ):
             snippet = _tok_to_py(c.meta, global_env, local_env, context)
 
         # 6) Other AST nodes → resolve then stringify
@@ -185,7 +190,7 @@ def evaluate_expression_tree(
                 pass
             val = getattr(c, "resolved", None) or getattr(c, "value", None)
             if isinstance(val, str):
-                snippet = repr(val.strip('"\'')) 
+                snippet = repr(val.strip("\"'"))
             else:
                 snippet = str(val)
 
@@ -213,7 +218,8 @@ def evaluate_expression_tree(
 
     # Mixed dynamic: preserve ${…}
     placeholder_idxs = [
-        idx for idx, part in enumerate(parts)
+        idx
+        for idx, part in enumerate(parts)
         if isinstance(part, str) and part.startswith("${")
     ]
     if placeholder_idxs:
@@ -235,9 +241,6 @@ def evaluate_expression_tree(
 
     # No placeholders detected, fallback
     return py_expr
-
-
-
 
 
 # ───────────────────── used by Config.render fallback ─────────────────────

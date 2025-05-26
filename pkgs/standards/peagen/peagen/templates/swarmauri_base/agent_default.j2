@@ -1,5 +1,5 @@
 I need you to generate a file named "{{ FILE.RENDERED_FILE_NAME }}". 
-This file provides a base implementation that extends a core interface class within the "{{ PKG.NAME }}" package.
+This file provides a base implementation that extends a core interface class within the "swarmauri_base" package.
 
 Below are the details and requirements for this task:
 
@@ -26,6 +26,7 @@ Below are the details and requirements for this task:
    - Include all abstract methods from the interface
    - All methods must have type annotations.
    - Ensure all necessary imports are included.
+   - When importing another swarmauri module, use absolute imports from the package root (e.g., `from swarmauri_core.resource.IResource import IResource` and `from swarmauri_core.another_resource.IAnotherResource import IAnotherResource`).
 
 
 ### Desired Output

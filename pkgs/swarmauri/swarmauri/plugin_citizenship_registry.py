@@ -112,6 +112,7 @@ class PluginCitizenshipRegistry:
         "swarmauri.llms.AI21StudioModel": "swarmauri_standard.llms.AI21StudioModel",
         "swarmauri.llms.AnthropicModel": "swarmauri_standard.llms.AnthropicModel",
         "swarmauri.llms.AnthropicToolModel": "swarmauri_standard.llms.AnthropicToolModel",
+        "swarmauri.llms.CerebrasModel": "swarmauri_standard.llms.CerebrasModel",
         "swarmauri.llms.CohereModel": "swarmauri_standard.llms.CohereModel",
         "swarmauri.llms.CohereToolModel": "swarmauri_standard.llms.CohereToolModel",
         "swarmauri.llms.DeepInfraModel": "swarmauri_standard.llms.DeepInfraModel",
@@ -275,6 +276,7 @@ class PluginCitizenshipRegistry:
         "swarmauri.loggers.Logger": "swarmauri_standard.loggers.Logger",
         "swarmauri.logger_handlers.StreamHandler": "swarmauri_standard.logger_handlers.StreamHandler",
         "swarmauri.logger_formatters.LoggerFormatter": "swarmauri_standard.logger_formatters.LoggerFormatter",
+        "swarmauri.rate_limits.TokenBucketRateLimit": "swarmauri_standard.rate_limits.TokenBucketRateLimit",
     }
     SECOND_CLASS_REGISTRY: Dict[str, str] = {}
     THIRD_CLASS_REGISTRY: Dict[str, str] = {}

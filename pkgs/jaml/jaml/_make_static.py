@@ -1,22 +1,31 @@
 # jaml/_helpers.py  (new small util module)
 from __future__ import annotations
-from copy import deepcopy
-from typing import Dict
+from typing import Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._ast_nodes import TableArraySectionNode, SectionNode
 
 
 def make_static_table_array(header_str: str, scope: Dict) -> "TableArraySectionNode":
     from ._ast_nodes import TableArraySectionNode, TableArrayHeaderNode
+
     ta = TableArraySectionNode()
     ta.header = TableArrayHeaderNode(origin=header_str, value=header_str)
-    ta.body   = []          # no inline assignments in the header-only form
-    ta.value  = scope
+    ta.body = []  # no inline assignments in the header-only form
+    ta.value = scope
     return ta
 
 
 def make_static_section(header: str, scope: Dict) -> "SectionNode":
     from ._ast_nodes import (
-        SectionNode, SectionNameNode, AssignmentNode,
-        SingleQuotedStringNode, IntegerNode, FloatNode, BooleanNode, NullNode
+        SectionNode,
+        SectionNameNode,
+        AssignmentNode,
+        SingleQuotedStringNode,
+        IntegerNode,
+        FloatNode,
+        BooleanNode,
+        NullNode,
     )
 
     """
@@ -27,7 +36,7 @@ def make_static_section(header: str, scope: Dict) -> "SectionNode":
 
     # header
     sn = SectionNameNode()
-    sn.parts = [type("Tok", (), {"value": header})]   # fake IDENTIFIER token
+    sn.parts = [type("Tok", (), {"value": header})]  # fake IDENTIFIER token
     sn.value = header
     sn.origin = header
     sec.header = sn
@@ -66,7 +75,7 @@ def make_static_section(header: str, scope: Dict) -> "SectionNode":
                 n = NullNode()
                 n.value = "null"
                 return n
-            return val                    # already a node or complex obj
+            return val  # already a node or complex obj
 
         a.value = wrap_scalar(v)
         a.resolved = v
