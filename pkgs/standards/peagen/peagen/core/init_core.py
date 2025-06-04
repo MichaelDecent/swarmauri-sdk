@@ -1,15 +1,5 @@
 """
 peagen.core.init_core
-=====================
-
-Business logic for Peagen scaffolding helpers.
-
-Public API
-----------
-- init_project()
-- init_template_set()
-- init_doe_spec()
-- init_ci()
 """
 
 from __future__ import annotations
@@ -109,6 +99,7 @@ def init_template_set(
 def init_doe_spec(
     path: Path,
     *,
+
     name: Optional[str] = None,
     org: Optional[str] = None,
     force: bool = False,
@@ -130,3 +121,4 @@ def init_ci(
     dst = Path(".")
     _render_scaffold(CI_SRC / kind, dst, {}, force)
     return {"created": str(dst / kind), "next": "commit CI file"}
+
