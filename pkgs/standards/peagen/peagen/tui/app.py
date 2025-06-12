@@ -776,11 +776,33 @@ class QueueDashboardApp(App):
                 self.toast("Could not determine task ID.", style="error")
 
     async def open_task_detail(self, task_id: str) -> None:
+        """Display the detail modal for the task matching ``task_id``.
+
+        ``task_id`` may be truncated (e.g., first few characters) so this method
+        attempts an exact lookup first and falls back to prefix matching.
+        """
+
         task = self.client.tasks.get(task_id)
         if not task:
             task = next(
                 (t for t in self.backend.tasks if str(t.get("id")) == task_id), None
             )
+
+        if not task:
+            # Attempt prefix match if a truncated ID was supplied
+            matches = [
+                t
+                for t in self.backend.tasks
+                if str(t.get("id", "")).startswith(task_id)
+            ]
+            if not matches:
+                matches = [
+                    data
+                    for tid, data in self.client.tasks.items()
+                    if str(tid).startswith(task_id)
+                ]
+            task = matches[0] if len(matches) == 1 else None
+
         if task:
             await self.push_screen(TaskDetailScreen(task_data=task))
         else:
