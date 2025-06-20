@@ -760,9 +760,18 @@ class QueueDashboardApp(App):
         row = self.tasks_table.cursor_row
         if row is None:
             return
+        row_key = None
         if hasattr(self.tasks_table, "get_row_key"):
-            row_key = self.tasks_table.get_row_key(row)
-        else:
+            try:
+                row_key = self.tasks_table.get_row_key(row)
+            except Exception:
+                row_key = None
+        if row_key is None and hasattr(self.tasks_table, "_row_locations"):
+            try:
+                row_key = self.tasks_table._row_locations.get_key(row)
+            except Exception:
+                row_key = None
+        if row_key is None:
             row_obj = (
                 self.tasks_table.get_row_at(row)
                 if hasattr(self.tasks_table, "get_row_at")
