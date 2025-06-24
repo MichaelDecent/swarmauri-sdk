@@ -34,6 +34,7 @@ from peagen.tui.components import (
     FilterBar,
     ReconnectScreen,
     TaskDetailScreen,
+    JumpPageScreen,
     TaskTable,
     TemplatesView,
     WorkersView,
@@ -1014,9 +1015,15 @@ class QueueDashboardApp(App):
         """Jump directly to *page* if provided or prompt the user."""
         if page is None:
             try:
-                page = int(input("Page number: "))
-            except Exception:
-                return
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(self._prompt_and_jump())
+            else:
+                self.run_worker(self._prompt_and_jump(), exclusive=True)
+            return
+        self._apply_jump_page(page)
+
+    def _apply_jump_page(self, page: int) -> None:
         if page <= 0:
             page = 1
         max_page = max(1, math.ceil(self.queue_len / self.limit))
@@ -1031,6 +1038,13 @@ class QueueDashboardApp(App):
         else:
             self.run_worker(coro, exclusive=True, group="data_refresh_worker")
         self.trigger_data_processing(debounce=False)
+
+    async def _prompt_and_jump(self) -> None:
+        current_page = self.offset // self.limit + 1
+        total_pages = max(1, math.ceil(self.queue_len / self.limit))
+        page = await self.push_screen_wait(JumpPageScreen(current_page, total_pages))
+        if page is not None:
+            self._apply_jump_page(page)
 
     async def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if isinstance(event.value, str) and event.value.startswith("[link="):
