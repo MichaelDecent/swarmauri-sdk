@@ -5,7 +5,7 @@ import datetime as dt
 from sqlalchemy import Boolean, Integer, String, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .task_run import Base
+from peagen.models.base import Base
 
 
 class AbuseRecord(Base):
