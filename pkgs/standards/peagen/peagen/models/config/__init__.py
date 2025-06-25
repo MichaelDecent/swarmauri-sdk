@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from peagen.models.config.secret import Secret
+from .secret import Secret
 
 __all__ = ["Secret"]
-
-
