@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from peagen.errors import InvalidPluginSpecError
 from swarmauri_base.keys import KeyProviderBase
+from swarmauri_base.git_filters import GitFilterBase
+from swarmauri_base.crypto.CryptoBase import CryptoBase
 
 # ---------------------------------------------------------------------------
 # Config – group key → (entry-point group string, expected base class)
@@ -25,12 +27,11 @@ GROUPS = {
     # "result_backends": ("peagen.plugins.result_backends", object),
     # deprecated: storage adapters are now git filters
     "storage_adapters": ("peagen.plugins.storage_adapters", object),
-    "git_filters": ("peagen.plugins.git_filters", object),
+    "git_filters": ("peagen.plugins.git_filters", GitFilterBase),
     "vcs": ("peagen.plugins.vcs", object),
     "selectors": ("peagen.plugins.selectors", object),
     # keys and secrets
-    "cryptos": ("peagen.plugins.cryptos", object),
-    "secrets_drivers": ("peagen.plugins.secret_drivers", object),
+    "cryptos": ("peagen.plugins.cryptos", CryptoBase),
     "key_providers": ("swarmauri.key_providers", KeyProviderBase),
     # template sets remain in the top-level package
     "template_sets": ("peagen.template_sets", None),
@@ -180,11 +181,6 @@ class PluginManager:
             "items": "plugins",
             "default": "default_selector",
         },
-        # "secrets_drivers": {
-        #     "section": "secrets",
-        #     "items": "adapters",
-        #     "default": "default_secret",
-        # },
         "llms": {
             "section": "llm",
             "default": "default_provider",

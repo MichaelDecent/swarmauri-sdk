@@ -5,6 +5,8 @@ import pytest
 
 import peagen.plugins as plugins
 from peagen.plugins import PluginManager
+from swarmauri_base.crypto.CryptoBase import CryptoBase
+from swarmauri_base.git_filters import GitFilterBase
 from swarmauri_base.keys import KeyProviderBase
 
 
@@ -30,6 +32,14 @@ def test_plugin_discovery_cached(monkeypatch):
                 if group == "swarmauri.key_providers":
 
                     class Dummy(KeyProviderBase):
+                        pass
+                elif group == "peagen.plugins.git_filters":
+
+                    class Dummy(GitFilterBase):
+                        pass
+                elif group == "peagen.plugins.cryptos":
+
+                    class Dummy(CryptoBase):
                         pass
                 else:
 

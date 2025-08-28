@@ -77,18 +77,26 @@ members = [
     "standards/autoapi",
     "standards/autoapi_client",
     "standards/peagen",
+    "standards/swarmauri_storage_file",
+    "standards/swarmauri_storage_github",
+    "standards/swarmauri_storage_github_release",
+    "standards/swarmauri_storage_minio",
+    "standards/swarmauri_gitfilter_file",
+    "standards/swarmauri_gitfilter_s3fs",
+    "standards/swarmauri_gitfilter_minio",
+    "standards/swarmauri_gitfilter_gh_release",
     "standards/auto_authn",
     "standards/auto_kms",
     "standards/swarmauri_certs_composite",
     "standards/swarmauri_keyprovider_local",
-    "standards/swarmauri_keyprovider_pkcs11",
     "standards/swarmauri_keyprovider_remote_jwks",
     "standards/swarmauri_keyprovider_ssh",
     "standards/swarmauri_keyprovider_file",
     "standards/swarmauri_keyproviders_mirrored",
     "standards/swarmauri_keyprovider_hierarchical",
     "standards/swarmauri_keyprovider_inmemory",
-    "swarmauri_certs_pkcs11",
+    "experimental/swarmauri_certs_pkcs11",
+    "experimental/swarmauri_keyprovider_pkcs11",
     "standards/swarmauri_crypto_paramiko",
     "standards/swarmauri_crypto_pgp",
     "standards/swarmauri_crypto_sodium",
@@ -107,7 +115,7 @@ members = [
     "standards/swarmauri_signing_ecdsa",
     "standards/swarmauri_signing_ca",
     "standards/swarmauri_signing_jws",
-    "swarmauri_certs_local_ca",
+    "standards/swarmauri_certs_local_ca",
     "standards/swarmauri_certs_self_signed",
     "standards/swarmauri_tokens_jwt",
     "standards/swarmauri_tokens_sshsig",
@@ -257,6 +265,14 @@ autoapi = { workspace = true }
 autoapi_client = { workspace = true }
 auto_authn = { workspace = true }
 peagen = { workspace = true }
+swarmauri_storage_file = { workspace = true }
+swarmauri_storage_github = { workspace = true }
+swarmauri_storage_github_release = { workspace = true }
+swarmauri_storage_minio = { workspace = true }
+swarmauri_gitfilter_file = { workspace = true }
+swarmauri_gitfilter_s3fs = { workspace = true }
+swarmauri_gitfilter_minio = { workspace = true }
+swarmauri_gitfilter_gh_release = { workspace = true }
 auto_kms = { workspace = true }
 
 swarmauri_secret_autogpg = { workspace = true }
