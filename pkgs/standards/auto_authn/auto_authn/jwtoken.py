@@ -35,6 +35,32 @@ _ALG = JWAAlg.EDDSA.value
 
 @lru_cache(maxsize=1)
 def _svc() -> Tuple[JWTTokenService, str]:
+    """Synchronous accessor for JWT service and kid.
+
+    This accessor must not perform any asynchronous work because it can be
+    called from import-time contexts. If the default key reference does not
+    exist yet, key creation is deferred to the async variant
+    :func:`ensure_default_service_async` and callers should prefer that from
+    within an event loop.
+    """
+    kp: FileKeyProvider = _provider()
+    if _DEFAULT_KEY_PATH.exists():
+        kid = _DEFAULT_KEY_PATH.read_text().strip()
+    else:
+        # Defer key creation to async path; the kid will be created on first
+        # async access. Until then, we return a service with an empty kid.
+        kid = ""
+    service = JWTTokenService(kp)
+    return service, kid
+
+
+async def ensure_default_service_async() -> Tuple[JWTTokenService, str]:
+    """Async initializer ensuring the default signing key exists.
+
+    Creates the Ed25519 key if missing, persists the kid, and returns the
+    configured :class:`JWTTokenService` and key id. This function is safe to
+    call from within a running event loop.
+    """
     kp: FileKeyProvider = _provider()
     if _DEFAULT_KEY_PATH.exists():
         kid = _DEFAULT_KEY_PATH.read_text().strip()
@@ -46,7 +72,7 @@ def _svc() -> Tuple[JWTTokenService, str]:
             export_policy=ExportPolicy.SECRET_WHEN_ALLOWED,
             label="jwt_ed25519",
         )
-        ref = asyncio.run(kp.create_key(spec))
+        ref = await kp.create_key(spec)
         kid = ref.kid
         _DEFAULT_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
         _DEFAULT_KEY_PATH.write_text(kid)
@@ -110,6 +136,11 @@ class JWTCoder:
     @classmethod
     def default(cls) -> "JWTCoder":
         svc, kid = _svc()
+        return cls(svc, kid)
+
+    @classmethod
+    async def async_default(cls) -> "JWTCoder":
+        svc, kid = await ensure_default_service_async()
         return cls(svc, kid)
 
     # -----------------------------------------------------------------

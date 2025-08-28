@@ -13,7 +13,7 @@ from ..orm.auth_session import AuthSession
 from ..routers.schemas import CredsIn, TokenPair
 from ..rfc8414_metadata import ISSUER
 from .authz import router as router
-from .shared import _jwt, _pwd_backend, AUTH_CODES, SESSIONS
+from .shared import get_jwt, _pwd_backend, AUTH_CODES, SESSIONS
 
 
 @router.post("/login", response_model=TokenPair)
@@ -21,6 +21,7 @@ async def login(
     creds: CredsIn,
     request: Request,
     db: AsyncSession = Depends(get_async_db),
+    jwt_coder = Depends(get_jwt),
 ):
     try:
         user = await _pwd_backend.authenticate(db, creds.identifier, creds.password)
@@ -34,7 +35,7 @@ async def login(
         "username": user.username,
     }
     session = await AuthSession.handlers.create.core({"db": db, "payload": payload})
-    access, refresh = await _jwt.async_sign_pair(
+    access, refresh = await jwt_coder.async_sign_pair(
         sub=str(user.id), tid=str(user.tenant_id), scope="openid profile email"
     )
     SESSIONS[session.id] = {
@@ -56,4 +57,4 @@ async def login(
     return response
 
 
-__all__ = ["router", "_jwt", "_pwd_backend", "AUTH_CODES", "SESSIONS"]
+__all__ = ["router", "_pwd_backend", "AUTH_CODES", "SESSIONS"]

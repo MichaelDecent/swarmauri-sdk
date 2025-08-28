@@ -34,13 +34,15 @@ from ..schemas import (
     RefreshIn,
     TokenPair,
 )
-from ..shared import _require_tls, _jwt, _pwd_backend, _ALLOWED_GRANT_TYPES
+from ..shared import _require_tls, _pwd_backend, _ALLOWED_GRANT_TYPES, get_jwt
 from . import router
 
 
 @router.post("/token", response_model=TokenPair)
 async def token(
-    request: Request, db: AsyncSession = Depends(get_async_db)
+    request: Request,
+    db: AsyncSession = Depends(get_async_db),
+    jwt_coder = Depends(get_jwt),
 ) -> TokenPair:
     _require_tls(request)
     form = await request.form()
@@ -118,7 +120,7 @@ async def token(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "invalid credentials")
         jwt_kwargs: dict[str, Any] = {"aud": aud} if aud else {}
         jwt_kwargs["scope"] = "openid profile email"
-        access, refresh = await _jwt.async_sign_pair(
+        access, refresh = await jwt_coder.async_sign_pair(
             sub=str(user.id), tid=str(user.tenant_id), **jwt_kwargs
         )
         return TokenPair(access_token=access, refresh_token=refresh)
@@ -153,7 +155,7 @@ async def token(
         jwt_kwargs = {"aud": aud} if aud else {}
         if auth_code.scope:
             jwt_kwargs["scope"] = auth_code.scope
-        access, refresh = await _jwt.async_sign_pair(
+        access, refresh = await jwt_coder.async_sign_pair(
             sub=str(auth_code.user_id), tid=str(auth_code.tenant_id), **jwt_kwargs
         )
         nonce = auth_code.nonce or secrets.token_urlsafe(8)
@@ -196,7 +198,7 @@ async def token(
                 status.HTTP_400_BAD_REQUEST, {"error": "authorization_pending"}
             )
         jwt_kwargs = {"aud": aud} if aud else {}
-        access, refresh = await _jwt.async_sign_pair(
+        access, refresh = await jwt_coder.async_sign_pair(
             sub=str(device_obj.user_id or "device-user"),
             tid=str(device_obj.tenant_id or "device-tenant"),
             **jwt_kwargs,
@@ -221,10 +223,14 @@ async def token(
 
 
 @router.post("/token/refresh", response_model=TokenPair)
-async def refresh(body: RefreshIn, request: Request):
+async def refresh(body: RefreshIn, request: Request, jwt_coder = Depends(get_jwt)):
     _require_tls(request)
     try:
-        access, refresh = _jwt.refresh(body.refresh_token)
+        payload = await jwt_coder.async_decode(body.refresh_token)
+        if payload.get("typ") != "refresh":
+            raise ValueError("not a refresh token")
+        base_claims = {k: v for k, v in payload.items() if k not in {"iat", "exp", "typ"}}
+        access, refresh = await jwt_coder.async_sign_pair(**base_claims)
     except Exception:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid refresh token")
     return TokenPair(access_token=access, refresh_token=refresh)

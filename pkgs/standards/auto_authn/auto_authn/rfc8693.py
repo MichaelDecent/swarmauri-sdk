@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 from enum import Enum
-from fastapi import APIRouter, FastAPI, Form, HTTPException, status
+from fastapi import APIRouter, FastAPI, Form, HTTPException, status, Depends
 
 from . import runtime_cfg
-from .rfc7519 import decode_jwt
+from .routers.shared import get_jwt
 from .jwtoken import JWTCoder
 
 RFC8693_SPEC_URL = "https://www.rfc-editor.org/rfc/rfc8693"
@@ -288,6 +288,7 @@ async def token_exchange_endpoint(
     actor_token_type: str | None = Form(None),
     audience: str | None = Form(None),
     scope: str | None = Form(None),
+    jwt_coder: JWTCoder = Depends(get_jwt),
 ):
     """RFC 8693 token exchange endpoint."""
 
@@ -303,8 +304,39 @@ async def token_exchange_endpoint(
         audience=audience,
         scope=scope,
     )
-    response = exchange_token(request, issuer="token-exchange")
-    return response.to_dict()
+    # Decode subject (and optionally actor) tokens using async coder
+    if request.subject_token_type not in (
+        TokenType.ACCESS_TOKEN.value,
+        TokenType.JWT.value,
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "unsupported token type")
+    try:
+        subject_claims = await jwt_coder.async_decode(request.subject_token)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid token: {exc}")
+    if request.actor_token and request.actor_token_type:
+        try:
+            await jwt_coder.async_decode(request.actor_token)
+        except Exception as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid actor: {exc}")
+
+    subject_id = subject_claims.get("sub", "unknown")
+    tenant_id = subject_claims.get("tid", "default")
+    eff_scope = request.scope or subject_claims.get("scope", "")
+    access_token = await jwt_coder.async_sign(
+        sub=subject_id,
+        tid=tenant_id,
+        scopes=eff_scope.split() if eff_scope else [],
+        aud=request.audience,
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": eff_scope,
+        "issued_token_type": request.requested_token_type
+        or TokenType.ACCESS_TOKEN.value,
+    }
 
 
 def create_impersonation_token(

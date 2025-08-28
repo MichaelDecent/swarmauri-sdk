@@ -16,7 +16,7 @@ from ...orm.tables import AuthCode, Client, User
 from ...oidc_id_token import mint_id_token, oidc_hash
 from ...rfc8414_metadata import ISSUER
 from ...rfc8252 import is_native_redirect_uri
-from ..shared import _require_tls, SESSIONS, AUTH_CODES
+from ..shared import _require_tls, SESSIONS, AUTH_CODES, get_jwt
 from . import router
 
 
@@ -37,6 +37,7 @@ async def authorize(
     login_hint: Optional[str] = None,
     claims: Optional[str] = None,
     db: AsyncSession = Depends(get_async_db),
+    jwt_coder = Depends(get_jwt),
 ):
     _require_tls(request)
     rts = set(response_type.split())
@@ -121,9 +122,7 @@ async def authorize(
         AUTH_CODES[code] = payload
         params.append(("code", code))
     if "token" in rts:
-        from ..shared import _jwt
-
-        access = await _jwt.async_sign(sub=user_sub, tid=tenant_id, scope=scope_str)
+        access = await jwt_coder.async_sign(sub=user_sub, tid=tenant_id, scope=scope_str)
         params.append(("access_token", access))
         params.append(("token_type", "bearer"))
     if "id_token" in rts:

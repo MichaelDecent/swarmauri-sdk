@@ -8,7 +8,7 @@ from ..jwtoken import JWTCoder
 from ..backends import PasswordBackend
 from ..runtime_cfg import settings
 
-_jwt = JWTCoder.default()
+_jwt: JWTCoder | None = None
 _pwd_backend = PasswordBackend()
 
 _ALLOWED_GRANT_TYPES = {"password", "authorization_code"}
@@ -22,6 +22,18 @@ SESSIONS: dict[str, dict[str, Any]] = {}
 def _require_tls(request: Request) -> None:
     if settings.require_tls and request.url.scheme != "https":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"error": "tls_required"})
+
+
+async def get_jwt() -> JWTCoder:
+    """FastAPI dependency that lazily initializes the JWTCoder.
+
+    Ensures key creation happens within the event loop to avoid
+    ``asyncio.run`` inside running loops during app startup/import.
+    """
+    global _jwt
+    if _jwt is None:
+        _jwt = await JWTCoder.async_default()
+    return _jwt
 
 
 async def _front_channel_logout(session_id: str) -> None:

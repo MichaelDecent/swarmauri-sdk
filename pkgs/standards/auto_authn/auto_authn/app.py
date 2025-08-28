@@ -82,6 +82,14 @@ async def _startup() -> None:
     # When running on SQLite, attach the same file under the "authn" alias
     # so schema-qualified tables like "authn.tenants" work.
     await surface_api.initialize_async(sqlite_attachments={"authn": "./authn.db"})
+    # 2 – ensure JWT coder is initialized in async context
+    try:
+        from .routers.shared import get_jwt
+
+        await get_jwt()
+    except Exception:
+        # Keep startup resilient; routes relying on JWT will initialize on-demand
+        pass
 
 
 app.add_event_handler("startup", _startup)
