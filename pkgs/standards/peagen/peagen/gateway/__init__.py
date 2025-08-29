@@ -187,8 +187,10 @@ api.include_models(
         RawBlob,
     ]
 )
-api.set_auth(authn=authn_adapter)
+api.set_auth(authn=authn_adapter.get_principal)
 
+api.mount_jsonrpc(prefix="/rpc")
+api.attach_diagnostics(prefix="/system")
 
 app.include_router(api.router)
 app.include_router(ws_router)
@@ -299,12 +301,6 @@ async def _startup() -> None:
 
     # 1 – metadata validation / SQLite convenience mode
     await api.initialize_async()
-    # ensure our hook runs second after the AuthN injection hook
-    _pre = api._hook_registry.get("PRE_TX_BEGIN", {}).get(None, [])
-    for idx, fn in enumerate(_pre):
-        if getattr(fn, "__name__", "") == "_shadow_principal":
-            _pre.insert(1, _pre.pop(idx))
-            break
 
     # 2 – run Alembic first so the ORM never creates tables implicitly
     if engine.url.get_backend_name() != "sqlite":
@@ -324,12 +320,9 @@ async def _startup() -> None:
     READY = True
     log.info(api.router)
     log.info(api.rpc)
-    log.info(api._registered_tables)
-    log.info(api._method_ids)
-    log.info(api._schemas)
-    log.info(api._allow_anon)
-    log.info(api.methods)
+    log.info(api.models)
     log.info(api.schemas)
+    log.info(api._allow_anon)
 
     log.info("gateway ready")
 

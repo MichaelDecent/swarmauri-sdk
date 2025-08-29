@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 from ..opspec import OpSpec
 from ..opspec.types import StepFn
 from .. import core as _core
+from ..runtime.executor import _Ctx
 
 # Optional SQLAlchemy type import — only used for safe checks (no hard dependency)
 try:  # pragma: no cover
@@ -82,10 +83,15 @@ def _ctx_get(ctx: Mapping[str, Any], key: str, default: Any = None) -> Any:
         return getattr(ctx, key, default)
 
 
-def _ctx_payload(ctx: Mapping[str, Any]) -> Mapping[str, Any]:
+def _ctx_payload(ctx: Mapping[str, Any]) -> Any:
     v = _ctx_get(ctx, "payload", None)
-    # Never let non-mapping (incl. SQLA ClauseElement) flow as payload
-    return v if isinstance(v, Mapping) else {}
+    # Allow mappings or sequences of mappings (bulk) but block other types like
+    # SQLA ClauseElement.
+    if isinstance(v, Mapping):
+        return v
+    if isinstance(v, Sequence) and not isinstance(v, (str, bytes)):
+        return v
+    return {}
 
 
 def _ctx_db(ctx: Mapping[str, Any]) -> Any:
@@ -430,13 +436,16 @@ def _wrap_custom(model: type, sp: OpSpec, user_handler: Callable[..., Any]) -> S
         payload = _ctx_payload(ctx)
         request = _ctx_request(ctx)
 
+        # Normalize ctx into an isolated _Ctx so user handlers can't mutate caller state
+        isolated = _Ctx.ensure(request=request, db=db, seed=ctx)
+
         # Try to resolve a *bound* attribute from the class if available
         bound = getattr(model, getattr(user_handler, "__name__", ""), user_handler)
         wanted = _accepted_kw(bound)
 
         kw = {}
         if "ctx" in wanted:
-            kw["ctx"] = ctx
+            kw["ctx"] = isolated
         if "db" in wanted:
             kw["db"] = db
         if "payload" in wanted:
@@ -473,6 +482,8 @@ def _wrap_core(model: type, target: str) -> StepFn:
         payload = _ctx_payload(ctx)
 
         if target == "create":
+            if isinstance(payload, list):
+                return await _core.bulk_create(model, payload, db=db)
             return await _core.create(model, payload, db=db)
 
         if target == "read":
@@ -499,28 +510,24 @@ def _wrap_core(model: type, target: str) -> StepFn:
             return await _core.clear(model, {}, db=db)
 
         if target == "bulk_create":
-            rows = payload.get("rows") if isinstance(payload, Mapping) else None
-            if rows is None:
-                rows = []
-            return await _core.bulk_create(model, rows, db=db)
+            if not isinstance(payload, list):
+                raise TypeError("bulk_create expects a list payload")
+            return await _core.bulk_create(model, payload, db=db)
 
         if target == "bulk_update":
-            rows = payload.get("rows") if isinstance(payload, Mapping) else None
-            if rows is None:
-                rows = []
-            return await _core.bulk_update(model, rows, db=db)
+            if not isinstance(payload, list):
+                raise TypeError("bulk_update expects a list payload")
+            return await _core.bulk_update(model, payload, db=db)
 
         if target == "bulk_replace":
-            rows = payload.get("rows") if isinstance(payload, Mapping) else None
-            if rows is None:
-                rows = []
-            return await _core.bulk_replace(model, rows, db=db)
+            if not isinstance(payload, list):
+                raise TypeError("bulk_replace expects a list payload")
+            return await _core.bulk_replace(model, payload, db=db)
 
         if target == "bulk_upsert":
-            rows = payload.get("rows") if isinstance(payload, Mapping) else None
-            if rows is None:
-                rows = []
-            return await _core.bulk_upsert(model, rows, db=db)
+            if not isinstance(payload, list):
+                raise TypeError("bulk_upsert expects a list payload")
+            return await _core.bulk_upsert(model, payload, db=db)
 
         if target == "bulk_delete":
             ids = payload.get("ids") if isinstance(payload, Mapping) else None
