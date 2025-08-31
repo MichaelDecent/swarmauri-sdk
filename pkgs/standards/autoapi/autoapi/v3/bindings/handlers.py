@@ -482,8 +482,6 @@ def _wrap_core(model: type, target: str) -> StepFn:
         payload = _ctx_payload(ctx)
 
         if target == "create":
-            if isinstance(payload, list):
-                return await _core.bulk_create(model, payload, db=db)
             return await _core.create(model, payload, db=db)
 
         if target == "read":
@@ -497,6 +495,10 @@ def _wrap_core(model: type, target: str) -> StepFn:
         if target == "replace":
             ident = _resolve_ident(model, ctx)
             return await _core.replace(model, ident, payload, db=db)
+
+        if target == "merge":
+            ident = _resolve_ident(model, ctx)
+            return await _core.merge(model, ident, payload, db=db)
 
         if target == "delete":
             ident = _resolve_ident(model, ctx)
@@ -524,10 +526,10 @@ def _wrap_core(model: type, target: str) -> StepFn:
                 raise TypeError("bulk_replace expects a list payload")
             return await _core.bulk_replace(model, payload, db=db)
 
-        if target == "bulk_upsert":
+        if target == "bulk_merge":
             if not isinstance(payload, list):
-                raise TypeError("bulk_upsert expects a list payload")
-            return await _core.bulk_upsert(model, payload, db=db)
+                raise TypeError("bulk_merge expects a list payload")
+            return await _core.bulk_merge(model, payload, db=db)
 
         if target == "bulk_delete":
             ids = payload.get("ids") if isinstance(payload, Mapping) else None

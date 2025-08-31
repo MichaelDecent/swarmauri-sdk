@@ -44,6 +44,7 @@ from peagen.orm import (
     # RoleGrant,
     # RolePerm,
     RepoSecret,
+    Worker,
     Task,
     Tenant,
     User,
@@ -167,6 +168,11 @@ authn_adapter = RemoteAuthNAdapter(
 api = AutoAPI(
     get_async_db=get_async_db, api_hooks={"PRE_TX_BEGIN": [_shadow_principal]}
 )
+api.set_auth(
+    authn=authn_adapter.get_principal,
+    optional_authn_dep=authn_adapter.get_principal_optional,
+    allow_anon=False,
+)
 api.include_models(
     [
         Tenant,
@@ -182,12 +188,12 @@ api.include_models(
         PublicKey,
         GPGKey,
         Pool,
+        Worker,
         Task,
         Work,
         RawBlob,
     ]
 )
-api.set_auth(authn=authn_adapter.get_principal)
 
 api.mount_jsonrpc(prefix="/rpc")
 api.attach_diagnostics(prefix="/system")

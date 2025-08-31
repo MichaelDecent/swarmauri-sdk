@@ -23,6 +23,7 @@ from ..config.constants import (
     AUTOAPI_OPS_ATTR,
 )
 from ..decorators import alias_map_for  # canonical→alias mapping source
+from .canonical import should_wire_canonical
 
 try:
     # Per-model registry (observable, triggers rebind elsewhere)
@@ -132,16 +133,20 @@ def _generate_canonical(model: type) -> List[OpSpec]:
         "read",
         "update",
         "replace",
+        "merge",
         "delete",
         "list",
         "clear",
         "bulk_create",
         "bulk_update",
         "bulk_replace",
+        "bulk_merge",
         "bulk_delete",
     )
     out: List[OpSpec] = []
     for target in canon_targets:
+        if not should_wire_canonical(model, target):
+            continue
         alias = (
             target  # canonical alias matches the target (may be remapped by alias_ctx)
         )
@@ -151,7 +156,7 @@ def _generate_canonical(model: type) -> List[OpSpec]:
                 target=target,  # ← canonical verb goes here
                 table=model,
                 arity="member"
-                if target in {"read", "update", "replace", "delete"}
+                if target in {"read", "update", "replace", "merge", "delete"}
                 else "collection",
                 # persistent by default; binder will auto START_TX/END_TX where appropriate
                 persist="default",

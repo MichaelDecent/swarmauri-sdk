@@ -181,7 +181,8 @@ def test_atom_injection():
     bind(Gadget)
     chains = build_phase_chains(Gadget, "create")
     non_handler = [ph for ph in PHASES if ph != "HANDLER" and chains.get(ph)]
-    assert non_handler  # atoms or hooks provide extra steps
+    # atom discovery injects steps into additional phases beyond the handler
+    assert non_handler
 
 
 @pytest.mark.i9n

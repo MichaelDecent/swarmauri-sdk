@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 
 _Key = Tuple[str, str]  # (alias, target)
 
+
+# Mapping with attribute-style access
+class AttrDict(dict):
+    def __getattr__(self, item: str) -> Any:  # pragma: no cover - trivial
+        try:
+            return self[item]
+        except KeyError as e:  # pragma: no cover - debug helper
+            raise AttributeError(item) from e
+
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ───────────────────────────────────────────────────────────────────────────────
@@ -96,6 +106,24 @@ def _coerce_payload(payload: Any) -> Any:
     return {}
 
 
+def _ensure_jsonable(obj: Any) -> Any:
+    """Best-effort conversion of DB rows or ORM objects to primitives."""
+    if isinstance(obj, (list, tuple)):
+        return [_ensure_jsonable(x) for x in obj]
+    if isinstance(obj, Mapping):
+        try:
+            return AttrDict({k: _ensure_jsonable(v) for k, v in dict(obj).items()})
+        except Exception:
+            pass
+    try:
+        data = vars(obj)
+    except TypeError:
+        return obj
+    return AttrDict(
+        {k: _ensure_jsonable(v) for k, v in data.items() if not k.startswith("_")}
+    )
+
+
 def _validate_input(
     model: type, alias: str, target: str, payload: Mapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -132,18 +160,22 @@ def _serialize_output(model: type, alias: str, target: str, result: Any) -> Any:
     """
     schemas_root = getattr(model, "schemas", None)
     if not schemas_root:
-        return result
+        return _ensure_jsonable(result)
     alias_ns = getattr(schemas_root, alias, None)
     if not alias_ns:
-        return result
+        return _ensure_jsonable(result)
 
-    out_model = getattr(alias_ns, "out", None)
+    if target in {"bulk_create", "bulk_update", "bulk_replace", "bulk_merge"}:
+        out_model = getattr(alias_ns, "out_item", None)
+    else:
+        out_model = getattr(alias_ns, "out", None)
+
     if (
         not out_model
         or not inspect.isclass(out_model)
         or not issubclass(out_model, BaseModel)
     ):
-        return result
+        return _ensure_jsonable(result)
 
     try:
         if target == "list" and isinstance(result, (list, tuple)):
@@ -151,12 +183,16 @@ def _serialize_output(model: type, alias: str, target: str, result: Any) -> Any:
                 out_model.model_validate(x).model_dump(exclude_none=True, by_alias=True)
                 for x in result
             ]
-        if target in {"bulk_create", "bulk_update", "bulk_replace"} and isinstance(
-            result, (list, tuple)
-        ):
-            return out_model.model_validate(result).model_dump(
-                exclude_none=True, by_alias=True
-            )
+        if target in {
+            "bulk_create",
+            "bulk_update",
+            "bulk_replace",
+            "bulk_merge",
+        } and isinstance(result, (list, tuple)):
+            return [
+                out_model.model_validate(x).model_dump(exclude_none=True, by_alias=True)
+                for x in result
+            ]
         # Single object case
         return out_model.model_validate(result).model_dump(
             exclude_none=True, by_alias=True
@@ -170,7 +206,7 @@ def _serialize_output(model: type, alias: str, target: str, result: Any) -> Any:
             e,
             exc_info=True,
         )
-        return result
+        return _ensure_jsonable(result)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -199,13 +235,30 @@ def _build_rpc_callable(model: type, sp: OpSpec) -> Callable[..., Awaitable[Any]
         ctx: Optional[Dict[str, Any]] = None,
     ) -> Any:
         # 1) normalize + validate input
+        schemas_root = getattr(model, "schemas", None)
+        alias_ns = getattr(schemas_root, alias, None)
+        item_in_model = getattr(alias_ns, "in_item", None)
+
         raw_payload = _coerce_payload(payload)
-        if target.startswith("bulk_") and isinstance(raw_payload, Sequence):
+        if target == "bulk_delete" and not isinstance(raw_payload, Mapping):
+            raw_payload = {"ids": raw_payload}
+        if (
+            target.startswith("bulk_")
+            and target != "bulk_delete"
+            and isinstance(raw_payload, Sequence)
+        ):
             merged_payload = []
             for item in raw_payload:
-                if isinstance(item, Mapping):
-                    norm = _validate_input(model, alias, target, dict(item))
+                if item_in_model and isinstance(item, Mapping):
+                    norm = item_in_model.model_validate(dict(item)).model_dump(
+                        exclude_none=True
+                    )
                     merged_payload.append({**dict(item), **norm})
+                elif item_in_model:
+                    norm = item_in_model.model_validate(item).model_dump(
+                        exclude_none=True
+                    )
+                    merged_payload.append(norm)
                 else:
                     merged_payload.append(item)
         else:
