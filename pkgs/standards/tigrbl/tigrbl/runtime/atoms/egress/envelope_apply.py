@@ -14,7 +14,11 @@ def run(obj: object | None, ctx: Any) -> None:
         setattr(ctx, "temp", temp)
     egress = temp.setdefault("egress", {})
     payload = egress.get("wire_payload")
-    if payload is not None:
+    envelope_default = getattr(getattr(ctx, "response", None), "envelope_default", None)
+    is_transport_response = payload is not None and all(
+        hasattr(payload, attr) for attr in ("status_code", "headers", "body")
+    )
+    if payload is not None and envelope_default is True and not is_transport_response:
         egress["enveloped"] = {"data": payload}
 
 

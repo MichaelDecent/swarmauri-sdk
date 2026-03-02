@@ -18,7 +18,7 @@ from .atoms import (
     _is_persistent,
 )
 from .cache import _SpecsOnceCache, _WeakMaybeDict
-from .models import KernelPlan, OpKey, OpMeta, OpView
+from .models import KernelPlan, OpKey, OpMeta, OpView, RestMatcher
 from .opview_compiler import compile_opview_from_specs
 
 logger = logging.getLogger(__name__)
@@ -219,10 +219,11 @@ class Kernel:
             table_iter as _table_iter,
         )
 
-        proto_indices: dict[str, Any] = {}
+        proto_indices: dict[str, Any] = {"http.rest": RestMatcher()}
         opmeta: list[OpMeta] = []
         opkey_to_meta: dict[OpKey, int] = {}
         phase_chains: dict[int, Mapping[str, list[StepFn]]] = {}
+        opmeta_index_by_key: dict[tuple[type, str], int] = {}
 
         for model in _table_iter(app):
             for sp in _opspecs(model):
@@ -230,17 +231,26 @@ class Kernel:
                 target = (getattr(sp, "target", sp.alias) or sp.alias).lower()
                 opmeta.append(OpMeta(model=model, alias=sp.alias, target=target))
                 phase_chains[meta_index] = self.build(model, sp.alias)
+                opmeta_index_by_key[(model, sp.alias)] = meta_index
 
+                has_jsonrpc_binding = False
                 for binding in getattr(sp, "bindings", ()) or ():
                     if isinstance(binding, HttpRestBindingSpec):
+                        rest_index = proto_indices.setdefault(
+                            "http.rest", RestMatcher()
+                        )
                         for method in binding.methods:
                             selector = f"{method.upper()} {binding.path}"
                             opkey = OpKey(proto=binding.proto, selector=selector)
                             opkey_to_meta[opkey] = meta_index
-                            proto_indices.setdefault(binding.proto, {})[selector] = (
-                                meta_index
-                            )
+                            if hasattr(rest_index, "add"):
+                                rest_index.add(method, binding.path, meta_index)
+                            else:
+                                proto_indices.setdefault(binding.proto, {})[
+                                    selector
+                                ] = meta_index
                     elif isinstance(binding, HttpJsonRpcBindingSpec):
+                        has_jsonrpc_binding = True
                         opkey = OpKey(proto=binding.proto, selector=binding.rpc_method)
                         opkey_to_meta[opkey] = meta_index
                         proto_indices.setdefault(binding.proto, {})[
@@ -265,6 +275,52 @@ class Kernel:
                                 meta_index
                             )
 
+                # Compatibility default for RPC exposure when bindings are omitted.
+                if not has_jsonrpc_binding:
+                    selector = f"{model.__name__}.{sp.alias}"
+                    opkey = OpKey(proto="http.jsonrpc", selector=selector)
+                    opkey_to_meta[opkey] = meta_index
+                    proto_indices.setdefault("http.jsonrpc", {})[selector] = meta_index
+
+        # Compatibility fallback: include routers may mount bare REST routes with
+        # (tigrbl_model, tigrbl_alias) metadata but without table opspec indexes.
+        # Build route selectors directly from mounted routes so runtime matching
+        # still resolves operations for these models.
+        for route in getattr(app, "routes", ()) or ():
+            model = getattr(route, "tigrbl_model", None)
+            alias = getattr(route, "tigrbl_alias", None)
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", ()) or ()
+            if not (isinstance(model, type) and isinstance(alias, str) and alias):
+                continue
+            if not isinstance(path, str) or not path:
+                continue
+
+            meta_index = opmeta_index_by_key.get((model, alias))
+            if meta_index is None:
+                specs = getattr(
+                    getattr(model, "ops", SimpleNamespace()), "by_alias", {}
+                )
+                sp_list = specs.get(alias) or ()
+                sp = sp_list[0] if sp_list else None
+                target = (getattr(sp, "target", alias) or alias).lower()
+                meta_index = len(opmeta)
+                opmeta.append(OpMeta(model=model, alias=alias, target=target))
+                phase_chains[meta_index] = self.build(model, alias)
+                opmeta_index_by_key[(model, alias)] = meta_index
+
+            for method in methods:
+                if not isinstance(method, str):
+                    continue
+                selector = f"{method.upper()} {path}"
+                opkey = OpKey(proto="http.rest", selector=selector)
+                opkey_to_meta[opkey] = meta_index
+                rest_index = proto_indices.setdefault("http.rest", RestMatcher())
+                if hasattr(rest_index, "add"):
+                    rest_index.add(method, path, meta_index)
+                else:
+                    rest_index[selector] = meta_index
+
         return KernelPlan(
             proto_indices=proto_indices,
             opmeta=tuple(opmeta),
@@ -285,6 +341,34 @@ class Kernel:
         """Thin accessor for endpoint: guarantees primed, returns compiled kernel plan."""
         self.ensure_primed(app)
         return self.kernel_plan(app)
+
+    def compile_bootstrap_plan(self, app: Any) -> dict[str, list[StepFn]]:
+        """Compatibility API: return ingress-only phase plan with labeled steps."""
+        del app
+
+        def _mk_step(anchor: str) -> StepFn:
+            async def _step(ctx: Any) -> None:
+                del ctx
+                return None
+
+            setattr(_step, "__tigrbl_label", f"atom:bootstrap@{anchor}")
+            return _step
+
+        return {
+            "INGRESS_BEGIN": [
+                _mk_step(_ev.INGRESS_CTX_INIT),
+            ],
+            "INGRESS_PARSE": [
+                _mk_step(_ev.INGRESS_RAW_FROM_SCOPE),
+            ],
+            "INGRESS_ROUTE": [
+                _mk_step(_ev.ROUTE_PROTOCOL_DETECT),
+                _mk_step(_ev.ROUTE_BINDING_MATCH),
+                _mk_step(_ev.ROUTE_OP_RESOLVE),
+                _mk_step(_ev.ROUTE_PLAN_SELECT),
+                _mk_step(_ev.ROUTE_CTX_FINALIZE),
+            ],
+        }
 
     def invalidate_kernelz_payload(self, app: Optional[Any] = None) -> None:
         with self._lock:

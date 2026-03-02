@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Tuple
+import datetime as _dt
 
 import logging
 
 from ....mapping.column_mro_collect import mro_collect_columns
+from ....runtime.status.exceptions import HTTPException
+from ....runtime.status.mappings import status as _status
 
 logger = logging.getLogger("uvicorn")
 
@@ -78,9 +81,16 @@ def _colspecs(model: type) -> Mapping[str, Any]:
 
 
 def _filter_in_values(
-    model: type, data: Mapping[str, Any], verb: str
+    model: type, data: Mapping[str, Any] | list[Any], verb: str
 ) -> Dict[str, Any]:
     logger.info("_filter_in_values called with data=%s verb=%s", data, verb)
+    if not isinstance(data, Mapping):
+        if isinstance(data, list) and data and isinstance(data[0], Mapping):
+            # Compatibility: some create handlers still forward singleton list
+            # payloads (bulk-create shaped) through the create path.
+            data = data[0]
+        else:
+            data = {}
     specs = _colspecs(model)
     if not specs:
         result = dict(data)
@@ -90,9 +100,29 @@ def _filter_in_values(
     for k, v in data.items():
         sp = specs.get(k)
         if sp is None:
+            # Keep unknown keys so higher layers can decide how to handle
+            # passthrough metadata and extension fields.
             out[k] = v
             continue
         io = getattr(sp, "io", None)
+        paired_cfg = getattr(io, "_paired", None) if io is not None else None
+        if paired_cfg is not None and verb in tuple(getattr(paired_cfg, "verbs", ())):
+            is_hex_digest = (
+                isinstance(v, str)
+                and len(v) == 64
+                and all(ch in "0123456789abcdefABCDEF" for ch in v)
+            )
+            if not is_hex_digest:
+                raise HTTPException(
+                    status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=[
+                        {
+                            "field": k,
+                            "code": "forbidden",
+                            "message": "Field is managed by runtime and cannot be provided.",
+                        }
+                    ],
+                )
         allowed = True
         if io is not None:
             in_verbs = getattr(io, "in_verbs", ())
@@ -106,7 +136,14 @@ def _filter_in_values(
                 col = getattr(getattr(model, "__table__", None), "columns", {}).get(k)
                 py_t = getattr(getattr(col, "type", None), "python_type", None)
                 if py_t is not None and v is not None and not isinstance(v, py_t):
-                    out[k] = py_t(v)
+                    if py_t is _dt.datetime and isinstance(v, str):
+                        out[k] = _dt.datetime.fromisoformat(v.strip())
+                    elif py_t is _dt.date and isinstance(v, str):
+                        out[k] = _dt.date.fromisoformat(v.strip())
+                    elif py_t is _dt.time and isinstance(v, str):
+                        out[k] = _dt.time.fromisoformat(v.strip())
+                    else:
+                        out[k] = py_t(v)
                 else:
                     out[k] = v
             except Exception:

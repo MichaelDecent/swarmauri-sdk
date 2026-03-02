@@ -8,6 +8,8 @@ from .common import RouterLike, _ensure_router_ns
 from ...mapping import engine_resolver as _resolver
 from ...core.crud.helpers.model import _single_pk_name
 from ...mapping.op_resolver import resolve as resolve_ops
+from ...runtime.executor import _Ctx, _invoke
+from ...runtime.atoms.deps_inject._common import run_deps as _run_deps
 
 logger = logging.getLogger("uvicorn")
 logger.debug("Loaded module v3/mapping/router/rpc")
@@ -67,6 +69,7 @@ async def rpc_call(
 
     # Acquire DB if not explicitly provided (op > model > router > app)
     _release_db = None
+    _provided_db = db is not None
     if db is None:
         try:
             logger.debug(
@@ -94,6 +97,7 @@ async def rpc_call(
     # reference, which the runtime uses to resolve the opview. When absent, the
     # kernel falls back to cached specs for the given model and alias.
     ctx_dict: Dict[str, Any] = dict(ctx or {})
+    execute_runtime = bool(ctx_dict.pop("_execute_runtime", True))
     # Opportunistically derive path params from the payload when the caller
     # supplies the primary key in the body. Many RPC handlers expect the
     # identifier via ``ctx['path_params']`` (mirroring REST semantics), but
@@ -112,7 +116,58 @@ async def rpc_call(
 
     try:
         logger.debug("Executing rpc_call %s.%s", getattr(mdl, "__name__", mdl), method)
-        return await fn(payload, db=db, request=request, ctx=ctx_dict)
+        result = await fn(payload, db=db, request=request, ctx=ctx_dict)
+        if not isinstance(result, Mapping):
+            return result
+
+        phases = result.get("phases")
+        model = result.get("model")
+        alias = result.get("alias")
+        if not (isinstance(phases, Mapping) and isinstance(model, type) and alias):
+            return result
+        if not execute_runtime:
+            return result
+
+        exec_ctx = _Ctx.ensure(
+            request=result.get("request"),
+            db=result.get("db"),
+            seed=dict(result.get("ctx") or {}),
+        )
+        exec_ctx.model = model
+        exec_ctx.op = alias
+        exec_ctx.payload = result.get("payload")
+        serializer = result.get("serialize")
+        if callable(serializer):
+            exec_ctx.response_serializer = serializer
+
+        phase_chains = dict(phases)
+        pre_tx = list(phase_chains.get("PRE_TX_BEGIN", ()) or [])
+
+        async def _run_secdeps(ctx: Any) -> None:
+            await _run_deps(ctx, kind="secdep")
+
+        async def _run_deps_step(ctx: Any) -> None:
+            await _run_deps(ctx, kind="dep")
+
+        pre_tx.append(_run_secdeps)
+        pre_tx.append(_run_deps_step)
+        phase_chains["PRE_TX_BEGIN"] = tuple(pre_tx)
+
+        response = await _invoke(
+            request=result.get("request"),
+            db=result.get("db"),
+            phases=phase_chains,
+            ctx=exec_ctx,
+        )
+        # When callers pass an explicit DB session, preserve historical
+        # request-style behavior by committing successful RPC calls.
+        if _provided_db:
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                committed = commit()
+                if hasattr(committed, "__await__"):
+                    await committed
+        return response
     finally:
         if _release_db is not None:
             try:

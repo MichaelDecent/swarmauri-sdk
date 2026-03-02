@@ -67,6 +67,11 @@ PHASES: Tuple[Phase, ...] = (
     "ON_ROLLBACK",
 )
 
+# Backward-compatible phase constants.
+INGRESS_BEGIN = "INGRESS_BEGIN"
+INGRESS_PARSE = "INGRESS_PARSE"
+INGRESS_ROUTE = "INGRESS_ROUTE"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Canonical anchors (events) — the only moments atoms can bind to
 # Keep these names stable; labels use them directly: step_kind:domain:subject@ANCHOR
@@ -341,6 +346,9 @@ __all__ = [
     # Phases
     "Phase",
     "PHASES",
+    "INGRESS_BEGIN",
+    "INGRESS_PARSE",
+    "INGRESS_ROUTE",
     # Anchors (constants)
     "SCHEMA_COLLECT_IN",
     "INGRESS_CTX_INIT",

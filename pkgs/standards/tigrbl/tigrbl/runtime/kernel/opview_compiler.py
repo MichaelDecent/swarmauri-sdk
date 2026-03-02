@@ -32,12 +32,25 @@ def compile_opview_from_specs(specs: Mapping[str, Any], sp: Any) -> OpView:
             alias_in = getattr(io, "alias_in", None)
             if alias_in:
                 meta["alias_in"] = alias_in
+            header_in = getattr(io, "header_in", None)
+            if header_in:
+                meta["header_in"] = header_in
+                meta["header_required_in"] = bool(
+                    getattr(io, "header_required_in", False)
+                )
             required = bool(fs and alias in getattr(fs, "required_in", ()))
             meta["required"] = required
             base_nullable = (
                 True if storage is None else getattr(storage, "nullable", True)
             )
             meta["nullable"] = base_nullable
+            py_type = getattr(fs, "py_type", None)
+            if py_type is Any:
+                py_type = None
+            if py_type is None and storage is not None:
+                py_type = getattr(getattr(storage, "type_", None), "python_type", None)
+            if isinstance(py_type, type):
+                meta["py_type"] = py_type
             by_field_in[name] = meta
 
         if alias in out_verbs:

@@ -29,7 +29,9 @@ def _serialize_output(
     can JSON-encode the response.
     """
 
-    from ..._concrete._response import Response as _Response  # local import to avoid cycles
+    from ..._concrete._response import (
+        Response as _Response,
+    )  # local import to avoid cycles
 
     if isinstance(result, _Response):
         return result

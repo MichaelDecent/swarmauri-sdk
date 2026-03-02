@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 try:
-    from ...types import Depends, HTTPException
+    from ... import Depends
+    from ...runtime.status import HTTPException
 except Exception:  # pragma: no cover
 
     def Depends(fn):  # type: ignore

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any, MutableMapping, Optional, Union
 
 from .types import _Ctx, PhaseChains, Request, Session, AsyncSession
@@ -27,6 +28,15 @@ async def _invoke(
         ctx.app = ctx.router
     if getattr(ctx, "op", None) is None and getattr(ctx, "method", None) is not None:
         ctx.op = ctx.method
+    env = ctx.get("env")
+    op_name = getattr(ctx, "op", None) or ctx.get("op") or ctx.get("method")
+    if env is None:
+        ctx["env"] = SimpleNamespace(method=op_name)
+    elif getattr(env, "method", None) in (None, "", "unknown"):
+        try:
+            env.method = op_name
+        except Exception:
+            ctx["env"] = SimpleNamespace(method=op_name)
     if getattr(ctx, "model", None) is None:
         obj = getattr(ctx, "obj", None)
         if obj is not None:
@@ -140,6 +150,44 @@ async def _invoke(
             ctx["result"] = serializer(ctx.get("result"))
         except Exception:
             logger.exception("response serialization failed", exc_info=True)
+    else:
+        # Compatibility: POST_RESPONSE hooks historically mutate mapping-like
+        # payloads (ctx["response"].result["k"] = v). Normalize ORM results so
+        # hooks can safely mutate response bodies before transport rendering.
+        try:
+            result_obj = ctx.get("result")
+            is_transport_response = result_obj is not None and all(
+                hasattr(result_obj, attr) for attr in ("status_code", "headers", "body")
+            )
+            if not is_transport_response:
+                from ...mapping.rest.helpers import _ensure_jsonable
+
+                ctx["result"] = _ensure_jsonable(result_obj)
+        except Exception:
+            pass
+    temp = ctx.get("temp")
+    if isinstance(ctx.get("result"), dict):
+        result_map = dict(ctx["result"])
+        if isinstance(temp, dict):
+            extras = temp.get("response_extras")
+            if isinstance(extras, dict):
+                for key, value in extras.items():
+                    result_map.setdefault(key, value)
+        # Keep nullable out fields visible for callers that assert key presence.
+        try:
+            from ...mapping.column_mro_collect import mro_collect_columns
+
+            model = getattr(ctx, "model", None) or ctx.get("model")
+            alias = getattr(ctx, "op", None) or ctx.get("op")
+            if isinstance(model, type) and isinstance(alias, str):
+                for field, spec in (mro_collect_columns(model) or {}).items():
+                    io = getattr(spec, "io", None)
+                    out_verbs = tuple(getattr(io, "out_verbs", ()) or ())
+                    if alias in out_verbs:
+                        result_map.setdefault(field, None)
+        except Exception:
+            pass
+        ctx["result"] = result_map
     ctx.response = _NS(result=ctx.get("result"))
 
     await _run_phase("POST_COMMIT", allow_flush=True, allow_commit=False, in_tx=False)
@@ -156,8 +204,12 @@ async def _invoke(
         in_tx=False,
         nonfatal=True,
     )
-    if ctx.get("result") is not None:
-        ctx.response.result = ctx.get("result")
+    if isinstance(temp, dict) and "response_payload" in temp:
+        ctx["result"] = temp["response_payload"]
+        if hasattr(ctx, "response"):
+            ctx.response.result = ctx["result"]
+    elif hasattr(ctx, "response"):
+        ctx["result"] = getattr(ctx.response, "result", ctx.get("result"))
     return ctx.response.result
 
 

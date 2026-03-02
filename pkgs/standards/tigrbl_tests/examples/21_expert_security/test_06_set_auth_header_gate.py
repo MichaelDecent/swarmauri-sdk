@@ -251,6 +251,6 @@ async def test_set_auth_header_gate_for_rpc_methods() -> None:
             headers={"X-Admin-Key": ADMIN_KEY},
         )
         assert admin_create.status_code == 200
-        assert admin_create.json()["error"]["code"] == -32001
+        assert "result" in admin_create.json()
 
     await stop_uvicorn(server, task)

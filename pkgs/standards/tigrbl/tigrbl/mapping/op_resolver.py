@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .._spec.op_spec import OpSpec, TargetOp
+from .._spec.binding_spec import HttpJsonRpcBindingSpec, HttpRestBindingSpec
 from ..config.constants import TIGRBL_OPS_ATTR
 from ..op.canonical import should_wire_canonical
 from .op_mro_collect import mro_alias_map_for
@@ -103,9 +104,44 @@ def _generate_canonical(table: type) -> List[OpSpec]:
         "bulk_merge",
         "bulk_delete",
     }
+    method_for_target: Dict[str, Tuple[str, ...]] = {
+        "create": ("POST",),
+        "read": ("GET",),
+        "update": ("PATCH",),
+        "replace": ("PUT",),
+        "merge": ("PATCH",),
+        "delete": ("DELETE",),
+        "list": ("GET",),
+        "clear": ("DELETE",),
+        "bulk_create": ("POST",),
+        "bulk_update": ("PATCH",),
+        "bulk_replace": ("PUT",),
+        "bulk_merge": ("PATCH",),
+        "bulk_delete": ("DELETE",),
+    }
+    resource = (
+        getattr(table, "resource_name", None)
+        or getattr(table, "__resource__", None)
+        or table.__name__.lower()
+    )
+    member_targets = {"read", "update", "replace", "merge", "delete"}
     for alias, target in targets:
         if not should_wire_canonical(table, target):
             continue
+        path = (
+            f"/{resource}/{{item_id}}" if target in member_targets else f"/{resource}"
+        )
+        bindings = (
+            HttpRestBindingSpec(
+                proto="http.rest",
+                path=path,
+                methods=method_for_target.get(target, ("POST",)),
+            ),
+            HttpJsonRpcBindingSpec(
+                proto="http.jsonrpc",
+                rpc_method=f"{table.__name__}.{alias}",
+            ),
+        )
         specs.append(
             OpSpec(
                 table=table,
@@ -119,6 +155,7 @@ def _generate_canonical(table: type) -> List[OpSpec]:
                 hooks=(),
                 status_code=None,
                 extra={},
+                bindings=bindings,
             )
         )
     return specs

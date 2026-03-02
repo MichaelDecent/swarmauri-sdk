@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 from types import SimpleNamespace
 from typing import (
     Any,
@@ -30,12 +31,19 @@ from ..mapping.rest import build_router_and_attach as _build_router_and_attach
 from .._concrete._op_registry import get_registry
 from .._spec.op_spec import OpSpec
 from ._table_registry import TableRegistry
-from ..system.favicon import mount_favicon
 from ._routing import include_router as _include_router_impl
 from ..system import mount_openrpc as _mount_openrpc
 from ..system import mount_diagnostics as _mount_diagnostics
+from ..system.docs import build_openapi as _build_openapi
 from ..mapping import engine_resolver as _resolver
 from .._concrete._engine import Engine
+from .._concrete._response import Response
+from ..transport.jsonrpc.helpers import (
+    _err as _rpc_err,
+    _ok as _rpc_ok,
+    _normalize_params,
+)
+from ..runtime.status.exceptions import StatusDetailError
 
 
 class TigrblRouter(_Router):
@@ -62,8 +70,6 @@ class TigrblRouter(_Router):
     _authorize: Any = None
     _optional_authn_dep: Any = None
     _allow_anon_ops: set[str] = set()
-
-    mount_favicon = mount_favicon
 
     def __init__(
         self,
@@ -198,6 +204,8 @@ class TigrblRouter(_Router):
         Engine.install_from_objects(
             router=selected_router, tables=tuple(selected_tables)
         )
+        # Engine bindings changed; force initialize() to rebuild DDL on next call.
+        setattr(self, "_ddl_executed", False)
 
     async def rpc_call(
         self,
@@ -209,15 +217,148 @@ class TigrblRouter(_Router):
         request: Any = None,
         ctx: Optional[Dict[str, Any]] = None,
     ) -> Any:
+        seed_ctx = dict(ctx or {})
+        seed_ctx["_execute_runtime"] = True
         return await _rpc_call(
-            self, model_or_name, method, payload, db=db, request=request, ctx=ctx
+            self,
+            model_or_name,
+            method,
+            payload,
+            db=db,
+            request=request,
+            ctx=seed_ctx,
         )
 
     def mount_jsonrpc(
         self, *, prefix: str | None = None, tags: Sequence[str] | None = ("rpc",)
     ) -> Any:
-        del prefix, tags
-        raise RuntimeError("JSON-RPC transport mounting has been removed from ingress.")
+        self.jsonrpc_prefix = prefix or self.jsonrpc_prefix or "/rpc"
+        path = self.jsonrpc_prefix
+
+        async def _jsonrpc_endpoint(request: Any) -> Any:
+            if getattr(request, "method", "POST").upper() == "OPTIONS":
+                headers_obj = getattr(request, "headers", {}) or {}
+                get_header = (
+                    headers_obj.get
+                    if hasattr(headers_obj, "get")
+                    else lambda _k, _d=None: _d
+                )
+                origin = get_header("origin")
+                requested_headers = get_header("access-control-request-headers")
+                allow_origin = origin or "*"
+                allow_headers = requested_headers or "*"
+                headers = [
+                    ("allow", "OPTIONS,POST"),
+                    ("access-control-allow-origin", allow_origin),
+                    ("access-control-allow-methods", "OPTIONS,POST"),
+                    ("access-control-allow-headers", allow_headers),
+                ]
+                if origin is not None:
+                    headers.append(("vary", "origin,access-control-request-headers"))
+                return Response(
+                    status_code=204,
+                    headers=headers,
+                    body=b"",
+                )
+
+            payload = request.json_sync() if hasattr(request, "json_sync") else None
+            if isinstance(payload, list):
+                results = []
+                for item in payload:
+                    if not isinstance(item, dict):
+                        results.append(_rpc_err(-32600, "Invalid Request", None))
+                        continue
+                    out = await self._dispatch_jsonrpc_call(item, request)
+                    if out is not None:
+                        results.append(out)
+                if not results:
+                    return Response(status_code=204, body=b"")
+                return Response.json(results)
+
+            if not isinstance(payload, dict):
+                return Response.json(
+                    _rpc_err(-32700, "Parse error", None), status_code=400
+                )
+            single = await self._dispatch_jsonrpc_call(payload, request)
+            if single is None:
+                return Response(status_code=204, body=b"")
+            return Response.json(single)
+
+        self.add_route(
+            path,
+            _jsonrpc_endpoint,
+            methods=["POST", "OPTIONS"],
+            name="jsonrpc",
+            include_in_schema=False,
+            tags=list(tags or ()),
+        )
+        return self
+
+    async def _dispatch_jsonrpc_call(
+        self, envelope: dict[str, Any], request: Any
+    ) -> Any:
+        req_id = envelope.get("id")
+        method = envelope.get("method")
+        jsonrpc_version = envelope.get("jsonrpc")
+        if (jsonrpc_version is not None and jsonrpc_version != "2.0") or not isinstance(
+            method, str
+        ):
+            return _rpc_err(-32600, "Invalid Request", req_id)
+
+        model_name: str | None = None
+        alias = method
+        if "." in method:
+            model_name, alias = method.split(".", 1)
+
+        model = self.tables.get(model_name) if model_name else None
+        if model is None:
+            for candidate in self.tables.values():
+                if hasattr(getattr(candidate, "rpc", SimpleNamespace()), alias):
+                    model = candidate
+                    break
+        if model is None:
+            return _rpc_err(-32601, "Method not found", req_id)
+
+        params = _normalize_params(envelope.get("params"))
+        db, release_db = _resolver.acquire(router=self, model=model, op_alias=alias)
+        try:
+            result = await _rpc_call(
+                self,
+                model,
+                alias,
+                params,
+                db=db,
+                request=request,
+                ctx={"_execute_runtime": True},
+            )
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                committed = commit()
+                if inspect.isawaitable(committed):
+                    await committed
+        except Exception as exc:
+            if isinstance(exc, StatusDetailError):
+                from ..runtime.status.exceptions import HTTPException
+                from ..runtime.status.converters import http_exc_to_rpc
+
+                code, message, data = http_exc_to_rpc(
+                    HTTPException(
+                        status_code=int(getattr(exc, "status_code", 500) or 500),
+                        detail=getattr(exc, "detail", str(exc)),
+                    )
+                )
+                return _rpc_err(code, message, req_id, data=data)
+            return _rpc_err(-32603, str(exc), req_id)
+        finally:
+            if release_db is not None:
+                try:
+                    release_db()
+                except Exception:
+                    pass
+
+        if req_id is None:
+            return None
+        return _rpc_ok(result, req_id)
 
     def mount_openrpc(
         self,
@@ -228,6 +369,10 @@ class TigrblRouter(_Router):
     ) -> Any:
         """Mount an OpenRPC JSON endpoint onto this router instance."""
         return _mount_openrpc(self, path=path, name=name, tags=tags)
+
+    def openapi(self) -> Dict[str, Any]:
+        """Build and return the OpenAPI document for this router."""
+        return _build_openapi(self)
 
     def attach_diagnostics(
         self, *, prefix: str | None = None, app: Any | None = None
@@ -295,7 +440,8 @@ class TigrblRouter(_Router):
     def _refresh_security(self) -> None:
         """Re-seed auth deps on models and rebuild routers."""
         # Reset routes and allow_anon ops cache
-        self.routes = []
+        self._routes = []
+        self.routes = self._routes
         self._allow_anon_ops = set()
         for name, registered in self.tables.items():
             model = self._resolve_registered_model(name, registered)

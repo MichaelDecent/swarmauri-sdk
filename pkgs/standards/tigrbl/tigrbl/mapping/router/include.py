@@ -71,7 +71,37 @@ def _seed_security_and_deps(router: Any, model: type) -> None:
         auth_dep = router._authn
         logger.debug("Using default auth dependency for %s", model.__name__)
     if auth_dep is not None:
-        setattr(model, TIGRBL_AUTH_DEP_ATTR, auth_dep)
+        wrapped_auth_dep = auth_dep
+        if not getattr(auth_dep, "__tigrbl_authn_dep__", False):
+            # Preserve callable signature for dependency injection/OpenAPI
+            # by annotating the original callable when possible.
+            try:
+                setattr(auth_dep, "__tigrbl_authn_dep__", True)
+                setattr(auth_dep, "__tigrbl_dep_name__", "security.authn")
+            except Exception:
+                # Bound methods may not be writable; annotate the underlying function.
+                target = getattr(auth_dep, "__func__", None)
+                if target is not None:
+                    try:
+                        setattr(target, "__tigrbl_authn_dep__", True)
+                        setattr(target, "__tigrbl_dep_name__", "security.authn")
+                    except Exception:
+                        target = None
+                if target is not None:
+                    pass
+                else:
+                    async def _authn_dep_wrapper(
+                        request: Any = None, **kwargs: Any
+                    ) -> Any:
+                        rv = auth_dep(request, **kwargs)
+                        if hasattr(rv, "__await__"):
+                            rv = await rv
+                        return rv
+
+                    setattr(_authn_dep_wrapper, "__tigrbl_authn_dep__", True)
+                    setattr(_authn_dep_wrapper, "__tigrbl_dep_name__", "security.authn")
+                    wrapped_auth_dep = _authn_dep_wrapper
+        setattr(model, TIGRBL_AUTH_DEP_ATTR, wrapped_auth_dep)
     else:
         logger.debug("No auth dependency configured for %s", model.__name__)
 
@@ -203,7 +233,11 @@ def _attach_to_router(router: RouterLike, table: type) -> None:
     _ensure_router_ns(router)
 
     tname = table.__name__
-    rname = table.resource_name
+    rname = (
+        getattr(table, "resource_name", None)
+        or getattr(table, "__resource__", None)
+        or table.__name__.lower()
+    )
     rtitle = rname[:1].upper() + rname[1:]
     logger.debug("Attaching table %s as resource '%s'", tname, rname)
 

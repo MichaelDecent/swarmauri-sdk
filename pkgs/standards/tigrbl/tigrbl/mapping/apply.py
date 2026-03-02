@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 from . import columns as _columns_binding
 from . import handlers as _handlers_binding
@@ -18,6 +19,15 @@ from .model_registry import (
     _ensure_registry_listener,
 )
 from .context import MappingContext
+
+
+class _SpecList(list):
+    """List-like alias bucket with first-item attribute compatibility."""
+
+    def __getattr__(self, name: str) -> Any:
+        if not self:
+            raise AttributeError(name)
+        return getattr(self[0], name)
 
 
 def apply(context: MappingContext):
@@ -48,7 +58,14 @@ def apply(context: MappingContext):
 
     all_specs, by_key, by_alias = _index_specs(list(context.all_specs))
     model.ops = SimpleNamespace(all=all_specs, by_key=by_key, by_alias=by_alias)
-    model.opspecs = model.ops
+    # Back-compat: allow both direct-attr access (e.g. .arity) and indexed
+    # access (e.g. [0]) on alias buckets.
+    compat_by_alias = {alias: _SpecList(specs) for alias, specs in by_alias.items()}
+    model.opspecs = SimpleNamespace(
+        all=all_specs,
+        by_key=by_key,
+        by_alias=compat_by_alias,
+    )
     model.alias_map = dict(context.alias_map)
 
     _ensure_registry_listener(model)

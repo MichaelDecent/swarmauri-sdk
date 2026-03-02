@@ -39,10 +39,17 @@ from ..system import mount_openrpc as _mount_openrpc
 from ..system import build_openrpc_spec as _build_openrpc_spec
 from ..system.docs import build_openapi as _build_openapi
 from .._concrete._op_registry import get_registry
+from .._concrete._response import Response
 from .._spec.op_spec import OpSpec
 from ._table_registry import TableRegistry
 from .._spec.app_spec import AppSpec
 from ..system.favicon import FAVICON_PATH, mount_favicon
+from ..transport.jsonrpc.helpers import (
+    _err as _rpc_err,
+    _ok as _rpc_ok,
+    _normalize_params,
+)
+from ..runtime.status.exceptions import StatusDetailError
 
 
 # optional compat: legacy transactional decorator
@@ -103,19 +110,14 @@ class TigrblApp(_App):
             for binding in tuple(getattr(op_spec, "bindings", ()) or ())
         )
         if has_jsonrpc_binding:
-            app._ensure_default_router()
-            existing_paths = {
-                getattr(route, "path", None) for route in getattr(app, "routes", ())
-            }
-            if (
-                spec.jsonrpc_prefix not in existing_paths
-                and f"{spec.jsonrpc_prefix}/" not in existing_paths
-            ):
-                app.add_route(
-                    spec.jsonrpc_prefix,
-                    lambda *_args, **_kwargs: None,
-                    methods=["POST"],
-                )
+            app._auto_mount_jsonrpc_if_needed()
+        # Compatibility: AppSpec-built apps should be runnable under uvicorn
+        # without requiring an explicit imperative initialize() call.
+        try:
+            app.initialize()
+        except ValueError as exc:
+            if str(exc) != "Engine provider is not configured":
+                raise
         return app
 
     def __init__(
@@ -141,6 +143,12 @@ class TigrblApp(_App):
         if lifespan is not None:
             self.LIFESPAN = lifespan
         super().__init__(engine=engine, **asgi_kwargs)
+        if title is not None:
+            self.title = title
+        if version is not None:
+            self.version = version
+        if lifespan is not None:
+            self.lifespan = lifespan
         self._middlewares: list[tuple[Any, dict[str, Any]]] = []
         self.middlewares = tuple(getattr(self, "MIDDLEWARES", ()))
         declared_tables = getattr(self, "TABLES", ())
@@ -206,12 +214,41 @@ class TigrblApp(_App):
             declared_table_models.append(model)
         if declared_table_models:
             self.include_tables(declared_table_models)
+        self._auto_mount_jsonrpc_if_needed()
 
         if (
             self._has_local_op_declarations()
             and self.__class__.__name__ not in self._table_registry
         ):
             self.include_table(self.__class__)
+            self._auto_mount_jsonrpc_if_needed()
+
+    def _jsonrpc_route_exists(self) -> bool:
+        path = self.jsonrpc_prefix or "/rpc"
+        for route in getattr(self, "routes", ()) or ():
+            route_path = getattr(route, "path", None)
+            if route_path not in {path, f"{path}/"}:
+                continue
+            methods = {m.upper() for m in (getattr(route, "methods", ()) or ())}
+            if "POST" in methods:
+                return True
+        return False
+
+    def _has_jsonrpc_exposure(self) -> bool:
+        for table in tuple(self.tables.values()):
+            indexed = (
+                getattr(getattr(table, "opspecs", SimpleNamespace()), "all", ()) or ()
+            )
+            declared = getattr(table, "__tigrbl_ops__", ()) or ()
+            if indexed or declared:
+                return True
+        return False
+
+    def _auto_mount_jsonrpc_if_needed(self) -> None:
+        if self._jsonrpc_route_exists():
+            return
+        if self._has_jsonrpc_exposure():
+            self.mount_jsonrpc(prefix=self.jsonrpc_prefix)
 
     def _has_local_op_declarations(self) -> bool:
         """Return True when the app subclass declares op_alias/op_ctx operations."""
@@ -362,6 +399,7 @@ class TigrblApp(_App):
                 mount_prefix = prefix if prefix is not None else _default_prefix(table)
                 self.include_router(router, prefix=mount_prefix)
         self._sync_default_router_namespaces()
+        self._auto_mount_jsonrpc_if_needed()
         return result
 
     def include_tables(
@@ -394,6 +432,7 @@ class TigrblApp(_App):
                 )
                 self.include_router(router, prefix=mount_prefix)
         self._sync_default_router_namespaces()
+        self._auto_mount_jsonrpc_if_needed()
         return result
 
     def _sync_default_router_namespaces(self) -> None:
@@ -442,9 +481,9 @@ class TigrblApp(_App):
             if _resolver.resolve_provider() is None:
                 _resolver.set_default(router_engine)
 
+        resolved_tables: Dict[str, type] = {}
         router_tables = getattr(router, "tables", None)
         if isinstance(router_tables, dict) and router_tables:
-            resolved_tables: Dict[str, type] = {}
             core_ns = getattr(router, "core", None)
             for name, table in router_tables.items():
                 model = table if isinstance(table, type) else None
@@ -455,11 +494,43 @@ class TigrblApp(_App):
                     resolved_tables[name] = model
                     resolved_tables.setdefault(getattr(model, "__name__", name), model)
 
+        # Compatibility: when callers mount a bare model REST router
+        # (e.g. ``app.include_router(Model.rest.router)``), there may be no
+        # router.tables registry. Infer table models directly from route metadata.
+        if not resolved_tables:
+            routed = getattr(router, "router", router)
+            for route in getattr(routed, "routes", ()) or ():
+                model = getattr(route, "tigrbl_model", None)
+                if isinstance(model, type):
+                    name = getattr(model, "__name__", None) or str(id(model))
+                    resolved_tables.setdefault(name, model)
+
+        for name, table in resolved_tables.items():
+            self.tables.setdefault(name, table)
+        if self._default_router is not None and self._default_router is not router:
             for name, table in resolved_tables.items():
-                self.tables.setdefault(name, table)
-            if self._default_router is not None and self._default_router is not router:
-                for name, table in resolved_tables.items():
-                    self._default_router.tables.setdefault(name, table)
+                self._default_router.tables.setdefault(name, table)
+
+        # If an engine is attached after tables were already included, ensure DDL
+        # runs now so late-mounted engine configs still produce working routes.
+        has_bound_tables = bool(
+            resolved_tables
+            or tuple(
+                t
+                for t in tuple(getattr(self, "tables", {}).values() or ())
+                if isinstance(t, type)
+            )
+        )
+        if (
+            router_engine is not None
+            and has_bound_tables
+            and not getattr(self, "_ddl_executed", False)
+        ):
+            try:
+                self.initialize()
+            except ValueError as exc:
+                if str(exc) != "Engine provider is not configured":
+                    raise
 
         if not mount_router:
             return router
@@ -539,7 +610,15 @@ class TigrblApp(_App):
 
         awaitables = [r for r in [result, *router_results] if inspect.isawaitable(r)]
         if not awaitables:
-            return None
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return None
+
+            async def _noop() -> None:
+                return None
+
+            return _noop()
 
         async def _inner():
             for item in [result, *router_results]:
@@ -564,16 +643,147 @@ class TigrblApp(_App):
         request: Any = None,
         ctx: Optional[Dict[str, Any]] = None,
     ) -> Any:
+        seed_ctx = dict(ctx or {})
+        seed_ctx["_execute_runtime"] = True
         return await _rpc_call(
-            self, table_or_name, method, payload, db=db, request=request, ctx=ctx
+            self,
+            table_or_name,
+            method,
+            payload,
+            db=db,
+            request=request,
+            ctx=seed_ctx,
         )
 
     # ------------------------- extras / mounting -------------------------
 
     def mount_jsonrpc(self, *, prefix: str | None = None) -> Any:
-        if prefix is not None:
-            self.jsonrpc_prefix = prefix
-        return None
+        self.jsonrpc_prefix = prefix or self.jsonrpc_prefix or "/rpc"
+        path = self.jsonrpc_prefix
+
+        async def _jsonrpc_endpoint(request: Any) -> Any:
+            if getattr(request, "method", "POST").upper() == "OPTIONS":
+                headers_obj = getattr(request, "headers", {}) or {}
+                get_header = (
+                    headers_obj.get
+                    if hasattr(headers_obj, "get")
+                    else lambda _k, _d=None: _d
+                )
+                origin = get_header("origin")
+                requested_headers = get_header("access-control-request-headers")
+                allow_origin = origin or "*"
+                allow_headers = requested_headers or "*"
+                headers = [
+                    ("allow", "OPTIONS,POST"),
+                    ("access-control-allow-origin", allow_origin),
+                    ("access-control-allow-methods", "OPTIONS,POST"),
+                    ("access-control-allow-headers", allow_headers),
+                ]
+                if origin is not None:
+                    headers.append(("vary", "origin,access-control-request-headers"))
+                return Response(
+                    status_code=204,
+                    headers=headers,
+                    body=b"",
+                )
+
+            payload = request.json_sync() if hasattr(request, "json_sync") else None
+            if isinstance(payload, list):
+                results = []
+                for item in payload:
+                    if not isinstance(item, dict):
+                        results.append(_rpc_err(-32600, "Invalid Request", None))
+                        continue
+                    out = await self._dispatch_jsonrpc_call(item, request)
+                    if out is not None:
+                        results.append(out)
+                if not results:
+                    return Response(status_code=204, body=b"")
+                return Response.json(results)
+
+            if not isinstance(payload, dict):
+                return Response.json(
+                    _rpc_err(-32700, "Parse error", None), status_code=400
+                )
+            single = await self._dispatch_jsonrpc_call(payload, request)
+            if single is None:
+                return Response(status_code=204, body=b"")
+            return Response.json(single)
+
+        self.add_route(
+            path,
+            _jsonrpc_endpoint,
+            methods=["POST", "OPTIONS"],
+            name="jsonrpc",
+            include_in_schema=False,
+        )
+        return self
+
+    async def _dispatch_jsonrpc_call(
+        self, envelope: dict[str, Any], request: Any
+    ) -> Any:
+        req_id = envelope.get("id")
+        method = envelope.get("method")
+        jsonrpc_version = envelope.get("jsonrpc")
+        if (jsonrpc_version is not None and jsonrpc_version != "2.0") or not isinstance(
+            method, str
+        ):
+            return _rpc_err(-32600, "Invalid Request", req_id)
+
+        model_name: str | None = None
+        alias = method
+        if "." in method:
+            model_name, alias = method.split(".", 1)
+
+        model = self.tables.get(model_name) if model_name else None
+        if model is None:
+            for candidate in self.tables.values():
+                if hasattr(getattr(candidate, "rpc", SimpleNamespace()), alias):
+                    model = candidate
+                    break
+        if model is None:
+            return _rpc_err(-32601, "Method not found", req_id)
+
+        params = _normalize_params(envelope.get("params"))
+        db, release_db = _resolver.acquire(router=self, model=model, op_alias=alias)
+        try:
+            result = await _rpc_call(
+                self,
+                model,
+                alias,
+                params,
+                db=db,
+                request=request,
+                ctx={"_execute_runtime": True},
+            )
+            commit = getattr(db, "commit", None)
+            if callable(commit):
+                committed = commit()
+                if inspect.isawaitable(committed):
+                    await committed
+        except Exception as exc:
+            if isinstance(exc, StatusDetailError):
+                from ..runtime.status.exceptions import HTTPException
+                from ..runtime.status.converters import http_exc_to_rpc
+
+                code, message, data = http_exc_to_rpc(
+                    HTTPException(
+                        status_code=int(getattr(exc, "status_code", 500) or 500),
+                        detail=getattr(exc, "detail", str(exc)),
+                    )
+                )
+                return _rpc_err(code, message, req_id, data=data)
+            return _rpc_err(-32603, str(exc), req_id)
+        finally:
+            if release_db is not None:
+                try:
+                    release_db()
+                except Exception:
+                    pass
+
+        if req_id is None:
+            return None
+        return _rpc_ok(result, req_id)
 
     def mount_openapi(
         self,
@@ -696,6 +906,7 @@ class TigrblApp(_App):
         """Re-seed auth deps on tables and rebuild routers."""
         # Reset router to baseline and allow_anon ops cache
         self._routes = list(self._base_routes)
+        self.routes = self._routes
         self._allow_anon_ops = set()
         for table in self._table_registry.values():
             _seed_security_and_deps(self, table)

@@ -5,6 +5,7 @@ from typing import Any, Dict, Mapping, MutableMapping, Optional
 import logging
 
 from ... import events as _ev
+from ...opview import opview_from_ctx
 
 # Runs in PRE_HANDLER just before validation.
 ANCHOR = _ev.IN_VALIDATE  # "in:validate"
@@ -66,9 +67,28 @@ def run(obj: Optional[object], ctx: Any) -> None:
     in_values: Dict[str, Any] = {}
     present_fields: set[str] = set()
     unknown_keys: Dict[str, Any] = {}
+    forbidden_paired: set[str] = set()
+
+    try:
+        ov = opview_from_ctx(ctx)
+        paired_index = getattr(ov, "paired_index", {}) or {}
+    except Exception:
+        paired_index = {}
+    paired_alias_to_field = {
+        str(desc.get("alias")): field
+        for field, desc in paired_index.items()
+        if isinstance(desc, Mapping) and isinstance(desc.get("alias"), str)
+    }
 
     # First pass: direct field-name matches win
     for key, val in payload.items():
+        if key in paired_index:
+            forbidden_paired.add(key)
+            continue
+        alias_target = paired_alias_to_field.get(key)
+        if alias_target:
+            forbidden_paired.add(alias_target)
+            continue
         if key in by_field:
             in_values[key] = val
             present_fields.add(key)
@@ -86,8 +106,25 @@ def run(obj: Optional[object], ctx: Any) -> None:
             unknown_keys.pop(key, None)
 
     # Keep minimal diagnostics
+    request = getattr(ctx, "request", None)
+    req_headers = getattr(request, "headers", None)
+    if req_headers is not None:
+        for fname, entry in by_field.items():
+            header_name = _safe_str(entry.get("header_in"))
+            if not header_name:
+                continue
+            header_val = _read_header(req_headers, header_name)
+            if header_val is None:
+                # Header-driven fields should not accept body fallbacks.
+                in_values.pop(fname, None)
+                continue
+            in_values[fname] = header_val
+            present_fields.add(fname)
+
     temp["in_values"] = in_values
     temp["in_present"] = tuple(sorted(present_fields))
+    if forbidden_paired:
+        temp["in_forbidden_paired"] = tuple(sorted(forbidden_paired))
     if unknown_keys:
         temp["in_unknown"] = tuple(sorted(unknown_keys.keys()))
         logger.debug("Unknown inbound keys: %s", list(unknown_keys.keys()))
@@ -161,6 +198,22 @@ def _coerce_payload(ctx: Any) -> Mapping[str, Any] | Any:
 
 def _safe_str(v: Any) -> Optional[str]:
     return v if isinstance(v, str) and v else None
+
+
+def _read_header(headers: Any, name: str) -> str | None:
+    try:
+        value = headers.get(name)  # type: ignore[call-arg]
+    except Exception:
+        value = None
+    if value is None:
+        try:
+            value = headers.get(name.lower())  # type: ignore[call-arg]
+        except Exception:
+            value = None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 __all__ = ["ANCHOR", "run"]

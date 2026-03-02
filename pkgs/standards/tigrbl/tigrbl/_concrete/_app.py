@@ -130,11 +130,15 @@ class App(AppSpec):
     ) -> None:
         routers = (router,) if router is not None else self.ROUTERS
         tables = tables if tables is not None else self.TABLES
+        if not routers and not tables:
+            return
         if routers:
             for a in routers:
                 Engine.install_from_objects(app=self, router=a, tables=tuple(tables))
         else:
             Engine.install_from_objects(app=self, router=None, tables=tuple(tables))
+        # Engine bindings changed; force initialize() to rebuild DDL on next call.
+        setattr(self, "_ddl_executed", False)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         env = GwRawEnvelope(kind="asgi3", scope=scope, receive=receive, send=send)

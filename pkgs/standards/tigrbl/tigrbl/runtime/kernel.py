@@ -589,6 +589,12 @@ class Kernel:
                     for step in chains.get(ph, []) or []:
                         lbl = getattr(step, "__tigrbl_label", None)
                         out_phase = ph
+                        if (
+                            isinstance(lbl, str)
+                            and ph == "HANDLER"
+                            and lbl.startswith("tigrbl.core.crud.ops.")
+                        ):
+                            lbl = f"hook:wire:{lbl.replace('.', ':')}@{ph}"
                         seq.append(
                             f"{out_phase}:{lbl}"
                             if isinstance(lbl, str)

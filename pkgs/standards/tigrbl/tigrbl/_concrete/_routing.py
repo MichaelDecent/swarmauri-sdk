@@ -78,10 +78,40 @@ def include_router(router: Any, child: Any, *, prefix: str = "") -> None:
         setattr(router, "_child_routers", children)
     children.append((mount_prefix, child))
 
+    inherited_security = list(getattr(child, "security_deps", ()) or ())
+    inherited_deps = list(getattr(child, "dependencies", ()) or ())
+    parent_routes = getattr(router, "_routes", None)
+    if parent_routes is None:
+        parent_routes = []
+        setattr(router, "_routes", parent_routes)
+        setattr(router, "routes", parent_routes)
+
     for r in getattr(child, "routes", []) or []:
+        full_path = f"{mount_prefix}{getattr(r, 'path', '')}"
+        incoming_methods = {
+            str(m).upper() for m in (getattr(r, "methods", ()) or ("GET",))
+        }
+        # Prefer newly included routes when path+method overlaps existing routes.
+        parent_routes[:] = [
+            existing
+            for existing in parent_routes
+            if not (
+                getattr(existing, "path", None) == full_path
+                and incoming_methods
+                & {str(m).upper() for m in (getattr(existing, "methods", ()) or ())}
+            )
+        ]
+        deps = list(getattr(r, "dependencies", ()) or ())
+        secdeps = list(getattr(r, "security_dependencies", ()) or ())
+        for dep in inherited_deps:
+            if dep not in deps:
+                deps.append(dep)
+        for dep in inherited_security:
+            if dep not in secdeps:
+                secdeps.append(dep)
         add_route(
             router,
-            f"{mount_prefix}{getattr(r, 'path', '')}",
+            full_path,
             getattr(r, "endpoint", None),
             methods=list(getattr(r, "methods", ()) or ("GET",)),
             name=getattr(r, "name", None),
@@ -98,8 +128,8 @@ def include_router(router: Any, child: Any, *, prefix: str = "") -> None:
             response_schema=getattr(r, "response_schema", None),
             path_param_schemas=getattr(r, "path_param_schemas", None),
             query_param_schemas=getattr(r, "query_param_schemas", None),
-            dependencies=getattr(r, "dependencies", None),
-            security_dependencies=getattr(r, "security_dependencies", None),
+            dependencies=deps or None,
+            security_dependencies=secdeps or None,
             responses=getattr(r, "responses", None),
             tigrbl_model=getattr(r, "tigrbl_model", None),
             tigrbl_alias=getattr(r, "tigrbl_alias", None),

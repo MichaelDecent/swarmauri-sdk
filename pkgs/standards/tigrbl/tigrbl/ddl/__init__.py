@@ -262,17 +262,62 @@ def initialize(
     elif hasattr(obj, "__table__"):
         kwargs["model"] = obj
 
-    prov = _resolver.resolve_provider(**kwargs)
-    if prov is None:
-        raise ValueError("Engine provider is not configured")
+    def _resolve_registered_model(name: str, registered: Any) -> Any:
+        if isinstance(registered, type):
+            return registered
+        resolver = getattr(obj, "_resolve_registered_model", None)
+        if callable(resolver):
+            try:
+                model = resolver(name, registered)
+                if isinstance(model, type):
+                    return model
+            except Exception:
+                pass
+        return None
 
-    def _bootstrap(db):
+    provider_tables: Dict[int, tuple[Any, list[Any]]] = {}
+    if (
+        not tables
+        and hasattr(obj, "tables")
+        and isinstance(getattr(obj, "tables"), dict)
+    ):
+        for name, registered in getattr(obj, "tables").items():
+            model = _resolve_registered_model(name, registered)
+            if not isinstance(model, type):
+                continue
+            table = getattr(model, "__table__", None)
+            if table is None or not getattr(table, "columns", None):
+                continue
+            table_provider = _resolver.resolve_provider(
+                router=obj if hasattr(obj, "_collect_tables") else None,
+                model=model,
+            )
+            if table_provider is None:
+                continue
+            key = id(table_provider)
+            if key not in provider_tables:
+                provider_tables[key] = (table_provider, [])
+            bucket = provider_tables[key][1]
+            if table not in bucket:
+                bucket.append(table)
+
+    prov = _resolver.resolve_provider(**kwargs)
+    if prov is None and not provider_tables:
+        raise ValueError("Engine provider is not configured")
+    if prov is not None:
+        key = id(prov)
+        if key not in provider_tables:
+            provider_tables[key] = (prov, [])
+        if not provider_tables[key][1]:
+            provider_tables[key][1].extend(ts)
+
+    def _bootstrap(db, *, table_group: list[Any]):
         bind = db.get_bind() if hasattr(db, "get_bind") else db
         _create_all_on_bind(
             bind,
             schemas=schemas,
             sqlite_attachments=sqlite_attachments,
-            tables=ts,
+            tables=table_group,
         )
 
         # Keep ``obj.tables`` as a model registry. Runtime routing, docs generation,
@@ -301,11 +346,12 @@ def initialize(
         asyncio.get_running_loop()
     except RuntimeError:
         # No running event loop; fall back to fully synchronous bootstrap
-        db = next(prov.get_db())
-        try:
-            _bootstrap(db)
-        finally:
-            _close_without_loop(db)
+        for provider, table_group in provider_tables.values():
+            db = next(provider.get_db())
+            try:
+                _bootstrap(db, table_group=table_group)
+            finally:
+                _close_without_loop(db)
         setattr(obj, "_ddl_executed", True)
         return
     else:
@@ -314,46 +360,58 @@ def initialize(
         # bootstrap synchronously as well. This mirrors previous "initialize_sync"
         # behaviour and allows ``initialize()`` to be invoked without ``await``
         # from async contexts when using sync engines.
-        if not inspect.iscoroutinefunction(
-            prov.get_db
-        ) and not inspect.isasyncgenfunction(prov.get_db):
-            db = next(prov.get_db())
-            pending_close = None
-            try:
-                _bootstrap(db)
-            finally:
-                pending_close = _close_with_loop(db)
+        if all(
+            (not inspect.iscoroutinefunction(provider.get_db))
+            and (not inspect.isasyncgenfunction(provider.get_db))
+            for provider, _ in provider_tables.values()
+        ):
+            pending_closes = []
+            for provider, table_group in provider_tables.values():
+                db = next(provider.get_db())
+                try:
+                    _bootstrap(db, table_group=table_group)
+                finally:
+                    pending = _close_with_loop(db)
+                    if pending is not None:
+                        pending_closes.append(pending)
             setattr(obj, "_ddl_executed", True)
 
             class _Completed:
                 def __init__(self, pending):
-                    self._pending = pending
+                    self._pending = tuple(pending or ())
 
                 def __await__(self):  # pragma: no cover - trivial
-                    if self._pending is None:
+                    if not self._pending:
                         if False:
                             yield None
                         return None
 
                     async def _wait_pending():
-                        await self._pending
+                        for pending in self._pending:
+                            await pending
                         return None
 
                     return _wait_pending().__await__()
 
-            return _Completed(pending_close)
+            return _Completed(pending_closes)
 
         async def _inner():
-            if inspect.isasyncgenfunction(prov.get_db):
-                async for adb in prov.get_db():
-                    await adb.run_sync(_bootstrap)
-                    break
-            else:
-                gen = prov.get_db()
+            for provider, table_group in provider_tables.values():
+                if inspect.isasyncgenfunction(provider.get_db):
+                    async for adb in provider.get_db():
+                        await adb.run_sync(
+                            lambda sync_db: _bootstrap(sync_db, table_group=table_group)
+                        )
+                        break
+                    continue
+
+                gen = provider.get_db()
                 db = next(gen)
                 try:
                     if hasattr(db, "run_sync"):
-                        await db.run_sync(_bootstrap)
+                        await db.run_sync(
+                            lambda sync_db: _bootstrap(sync_db, table_group=table_group)
+                        )
                     else:
                         bind = db.get_bind()
                         await asyncio.to_thread(
@@ -361,7 +419,7 @@ def initialize(
                             bind,
                             schemas=schemas,
                             sqlite_attachments=sqlite_attachments,
-                            tables=ts,
+                            tables=table_group,
                         )
                 finally:
                     try:

@@ -62,6 +62,21 @@ def run(obj: Optional[object], ctx: Any) -> None:
             errors.append(
                 _err(name, "required", "Field is required but was not provided.")
             )
+    for name in tuple(temp.get("in_forbidden_paired") or ()):
+        errors.append(
+            _err(
+                name,
+                "forbidden",
+                "Field is managed by runtime and cannot be provided.",
+            )
+        )
+    # Header-required fields must be sourced from headers, not body payload.
+    for name, entry in by_field.items():
+        if bool(entry.get("header_required_in")) and name not in in_values:
+            logger.debug("Required header-backed field %s missing", name)
+            errors.append(
+                _err(name, "required", "Field is required but was not provided.")
+            )
 
     # 2) Per-field validation
     for name, value in list(in_values.items()):

@@ -60,7 +60,10 @@ async def _invoke_kwargs(
         if p.name == "ctx":
             kwargs[p.name] = ctx
         elif p.name in ("request", "db", "model", "op", "payload"):
-            kwargs[p.name] = getattr(ctx, p.name, None) or ctx.get(p.name)
+            value = getattr(ctx, p.name, None) or ctx.get(p.name)
+            if value is None and p.name == "request":
+                value = getattr(ctx, "req", None) or ctx.get("req")
+            kwargs[p.name] = value
         elif p.name in ctx:
             kwargs[p.name] = ctx[p.name]
         elif p.default is not inspect._empty and getattr(p.default, "dependency", None):
@@ -121,8 +124,15 @@ async def run_deps(ctx: Any, *, kind: str) -> None:
         try:
             if hasattr(rv, "__await__"):
                 rv = await cast(Any, rv)
-            if kind == "secdep" and rv is not None:
-                ctx["auth_context"] = rv
+            if kind == "secdep":
+                if bool(getattr(fn, "__tigrbl_authn_dep__", False)) and (
+                    rv is None or rv is False
+                ):
+                    from ...status.exceptions import HTTPException
+
+                    raise HTTPException(status_code=401, detail="Unauthorized")
+                if rv is not None:
+                    ctx["auth_context"] = rv
             _trace.end(ctx, seq)
         except Exception as exc:
             _trace.attach_error(ctx, seq, exc)

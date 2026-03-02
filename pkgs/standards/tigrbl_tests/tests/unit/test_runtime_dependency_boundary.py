@@ -14,7 +14,9 @@ from tigrbl import Depends
 from tigrbl import Request
 
 
-async def resolve_handler_kwargs(_router: SimpleNamespace, route: SimpleNamespace, _req: Request) -> dict[str, object]:
+async def resolve_handler_kwargs(
+    _router: SimpleNamespace, route: SimpleNamespace, _req: Request
+) -> dict[str, object]:
     kwargs: dict[str, object] = {}
     signature = inspect.signature(route.handler)
     for name, param in signature.parameters.items():

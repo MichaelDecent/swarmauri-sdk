@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
@@ -55,21 +56,63 @@ class _ResourceProxy:
             norm_payload = _validate_input(self._model, alias, alias, raw_payload)
 
             seed_ctx: Dict[str, Any] = dict(ctx or {})
-
+            release_db = None
             if db is None:
-                db, _ = _resolver.acquire(
+                db, release_db = _resolver.acquire(
                     router=self._router, model=self._model, op_alias=alias
                 )
+            try:
+                if self._router is not None:
+                    # Route core helper calls through rpc_call so runtime phases
+                    # (hooks/deps/transactions) execute consistently.
+                    from .rpc import rpc_call as _rpc_call
 
-            return {
-                "model": self._model,
-                "alias": alias,
-                "target": alias,
-                "payload": norm_payload,
-                "db": db,
-                "request": request,
-                "ctx": seed_ctx,
-            }
+                    exec_ctx = dict(seed_ctx)
+                    exec_ctx.setdefault("_execute_runtime", True)
+                    result = await _rpc_call(
+                        self._router,
+                        self._model,
+                        alias,
+                        norm_payload,
+                        db=db,
+                        request=request,
+                        ctx=exec_ctx,
+                    )
+                else:
+                    core_fn = h_alias.core
+                    try:
+                        result = core_fn(
+                            norm_payload, db=db, request=request, ctx=seed_ctx
+                        )
+                    except TypeError:
+                        seed_ctx.setdefault("payload", norm_payload)
+                        seed_ctx.setdefault("db", db)
+                        seed_ctx.setdefault("request", request)
+                        seed_ctx.setdefault("model", self._model)
+                        seed_ctx.setdefault("op", alias)
+                        result = core_fn(seed_ctx)
+                    if inspect.isawaitable(result):
+                        result = await result
+            except Exception as exc:
+                from ...runtime.status import create_standardized_error
+
+                raise create_standardized_error(exc)
+            finally:
+                if release_db is not None:
+                    try:
+                        release_db()
+                    except Exception:
+                        pass
+
+            if not self._serialize:
+                return result
+
+            try:
+                from ..rest.helpers import _ensure_jsonable
+
+                return _ensure_jsonable(result)
+            except Exception:
+                return result
 
         _call.__name__ = f"{self._model.__name__}.{alias}"
         _call.__qualname__ = _call.__name__

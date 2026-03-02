@@ -82,9 +82,18 @@ def test_include_table_and_rpc_call():
     assert phases["HANDLER"], "phase lifecycle must contain handler step"
 
     created = asyncio.run(
-        rpc_call(router, Widget, "create", {"id": uuid4(), "name": "w"}, db=db)
+        rpc_call(
+            router,
+            Widget,
+            "create",
+            {"id": uuid4(), "name": "w"},
+            db=db,
+            ctx={"_execute_runtime": False},
+        )
     )
-    listed = asyncio.run(rpc_call(router, Widget, "list", {}, db=db))
+    listed = asyncio.run(
+        rpc_call(router, Widget, "list", {}, db=db, ctx={"_execute_runtime": False})
+    )
     assert created["model"] is Widget
     assert created["alias"] == "create"
     assert created["payload"]["name"] == "w"

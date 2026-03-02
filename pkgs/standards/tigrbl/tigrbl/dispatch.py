@@ -45,11 +45,15 @@ async def dispatch_operation(
 ) -> Any:
     del target, rpc_mode
 
-    resolution = resolve_operation(router=router, model_or_name=model_or_name, alias=alias)
+    resolution = resolve_operation(
+        router=router, model_or_name=model_or_name, alias=alias
+    )
     model = resolution.model
     fn = getattr(getattr(model, "rpc", SimpleNamespace()), alias, None)
     if fn is None:
-        raise AttributeError(f"{getattr(model, '__name__', model)} has no RPC method '{alias}'")
+        raise AttributeError(
+            f"{getattr(model, '__name__', model)} has no RPC method '{alias}'"
+        )
 
     merged_ctx: Dict[str, Any] = {}
     if seed_ctx:

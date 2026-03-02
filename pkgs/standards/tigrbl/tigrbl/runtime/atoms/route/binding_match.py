@@ -35,6 +35,16 @@ def run(obj: object | None, ctx: Any) -> None:
         method = getattr(env, "method", None)
         path = getattr(env, "path", None)
         if isinstance(method, str) and isinstance(path, str):
+            matcher = getattr(index, "match", None)
+            if callable(matcher):
+                try:
+                    matched_index, path_params = matcher(method, path)
+                    route["binding"] = matched_index
+                    if isinstance(path_params, dict) and path_params:
+                        route["path_params"] = path_params
+                    return
+                except KeyError:
+                    return
             selector = f"{method.upper()} {path}"
     elif proto.endswith(".jsonrpc"):
         selector = route.get("rpc_method")

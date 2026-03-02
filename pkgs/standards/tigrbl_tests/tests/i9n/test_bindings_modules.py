@@ -125,7 +125,12 @@ async def test_router_include_and_rpc_call_returns_operation_envelope(model_cls)
 
     payload = {"name": "x"}
     result = await router_binding.rpc_call(
-        router, model_cls, "create", payload=payload, db=object()
+        router,
+        model_cls,
+        "create",
+        payload=payload,
+        db=object(),
+        ctx={"_execute_runtime": False},
     )
     assert result["model"] is model_cls
     assert result["alias"] == "create"

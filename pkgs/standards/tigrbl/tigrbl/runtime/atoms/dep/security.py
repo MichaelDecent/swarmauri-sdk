@@ -93,12 +93,30 @@ async def run(dep: object | None, ctx: Any) -> Any:
     router = getattr(ctx, "router", None) or ctx_map.get("router")
 
     if req is not None and router is not None:
-        return await invoke_dependency(router, fn, req)
+        resolved = await invoke_dependency(router, fn, req)
+    else:
+        try:
+            rv = fn(ctx)
+        except TypeError:
+            rv = fn()
+        if inspect.isawaitable(rv):
+            resolved = await rv
+        else:
+            resolved = rv
+
+    if bool(getattr(fn, "__tigrbl_authn_dep__", False)) and (
+        resolved is None or resolved is False
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
+        )
 
     try:
-        rv = fn(ctx)
-    except TypeError:
-        rv = fn()
-    if inspect.isawaitable(rv):
-        return await rv
-    return rv
+        ctx["auth_context"] = resolved
+    except Exception:
+        try:
+            setattr(ctx, "auth_context", resolved)
+        except Exception:
+            pass
+
+    return resolved

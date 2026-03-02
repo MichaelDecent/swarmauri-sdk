@@ -26,7 +26,43 @@ def model_iter(router: Any) -> Iterable[type]:
 
 
 def opspecs(model: type):
-    return getattr(getattr(model, "opspecs", SimpleNamespace()), "all", ()) or ()
+    indexed = getattr(getattr(model, "opspecs", SimpleNamespace()), "all", ()) or ()
+    declared_raw = getattr(model, "__tigrbl_ops__", ()) or ()
+    if isinstance(declared_raw, dict):
+        declared = tuple(declared_raw.values())
+    else:
+        declared = tuple(declared_raw)
+
+    normalized_declared = []
+    for sp in declared:
+        if hasattr(sp, "alias"):
+            normalized_declared.append(sp)
+            continue
+        if isinstance(sp, dict):
+            normalized_declared.append(SimpleNamespace(**sp))
+    declared = tuple(normalized_declared)
+    if not indexed:
+        return declared
+    if not declared:
+        return indexed
+
+    # Prefer explicitly declared opspecs (decorator/manual assignments), then
+    # keep any remaining indexed/default entries for compatibility.
+    merged = []
+    seen: set[tuple[Any, Any]] = set()
+    for sp in declared:
+        key = (getattr(sp, "alias", None), getattr(sp, "target", None))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(sp)
+    for sp in indexed:
+        key = (getattr(sp, "alias", None), getattr(sp, "target", None))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(sp)
+    return tuple(merged)
 
 
 def label_callable(fn: Any) -> str:

@@ -69,6 +69,8 @@ class Route:
             default = param.default
             if isinstance(default, Dependency):
                 dep_callable = default.dependency
+            elif hasattr(default, "dependency"):
+                dep_callable = getattr(default, "dependency", None)
 
             annotation = param.annotation
             if dep_callable is None and get_origin(annotation) is Annotated:
@@ -76,6 +78,10 @@ class Route:
                     if isinstance(meta, Dependency):
                         dep_callable = meta.dependency
                         break
+                    if hasattr(meta, "dependency"):
+                        dep_callable = getattr(meta, "dependency", None)
+                        if dep_callable is not None:
+                            break
 
             if dep_callable is not None:
                 dependencies.append(_param(param.name))
